@@ -10,9 +10,10 @@
 *.dylib
 
 # Configuration, Presets & Profiles
-*.set
 *.ini
 *.tpl
+# Allow curated Strategy Tester presets
+!Tests_And_Reports/Presets/*.set
 
 # Logs, Cache & History
 *.log

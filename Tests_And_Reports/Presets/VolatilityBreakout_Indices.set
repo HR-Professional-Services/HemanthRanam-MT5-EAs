@@ -1,0 +1,27 @@
+; Volatility Expansion Breakout EA - Index & Commodities Preset
+InpWatchlist=US500,US100,USOIL,XAUUSD
+InpMaxSpreadPoints=50
+InpScanTimerSeconds=5
+InpExecutionTF=15
+InpCompressionBars=20
+InpMaxCompressionATR=1.8
+InpMinVolumeMultiplier=1.30
+InpRewardToRiskRatio=2.5
+InpRiskPercent=0.5
+InpMaxDailyDrawdown=2.0
+InpMaxPortfolioRisk=1.5
+InpMaxTotalPositions=4
+InpMaxPositionsPerSymbol=1
+InpMagicNumber=103003
+InpSlippagePoints=10
+InpEnableBreakEven=true
+InpBreakEvenTriggerR=1.0
+InpBreakEvenBufferPts=5.0
+InpEnableTrailing=true
+InpTrailingStopPts=55.0
+InpEnableSessionFilter=true
+InpBrokerGMTOffset=0
+InpTradeLondon=true
+InpTradeNewYork=true
+InpTradeAsian=false
+InpRolloverBlackout=true

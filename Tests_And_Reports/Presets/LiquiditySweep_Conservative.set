@@ -1,0 +1,29 @@
+; Liquidity Sweep Reversal EA - Conservative Preset
+; Suitable for Forex Majors and Gold
+InpWatchlist=XAUUSD,EURUSD,GBPUSD,USDJPY
+InpMaxSpreadPoints=35
+InpScanTimerSeconds=5
+InpExecutionTF=15
+InpSwingLookbackBars=28
+InpMinSweepPoints=20.0
+InpMaxSweepPoints=300.0
+InpMinDisplacementR=0.55
+InpRewardToRiskRatio=2.5
+InpRiskPercent=0.5
+InpMaxDailyDrawdown=2.0
+InpMaxPortfolioRisk=1.5
+InpMaxTotalPositions=4
+InpMaxPositionsPerSymbol=1
+InpMagicNumber=101001
+InpSlippagePoints=10
+InpEnableBreakEven=true
+InpBreakEvenTriggerR=1.0
+InpBreakEvenBufferPts=5.0
+InpEnableTrailing=false
+InpTrailingStopPts=50.0
+InpEnableSessionFilter=true
+InpBrokerGMTOffset=0
+InpTradeLondon=true
+InpTradeNewYork=true
+InpTradeAsian=false
+InpRolloverBlackout=true
