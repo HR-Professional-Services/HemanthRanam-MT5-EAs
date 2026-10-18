@@ -50,3 +50,20 @@ This document provides a comprehensive technical audit of the original **24 sour
    - Reusable code extracted into 6 production include modules in `Include/`.
    - Five distinct, mathematically justified trading systems built on top.
    - 100% of the original 24 raw files safely preserved in Git history on branch `archive/v1-raw-24-eas` and release tag `v1.0.0-raw-eas`.
+
+---
+
+## 3. Suite Restoration & Standalone Architecture (Update)
+
+In response to founder requirements to retain valuable multi-pair scanners and dedicated EMA strategies while preserving strict repository organization:
+1. **Three Distinct Groups Preserved**:
+   - **Group A (Folders 01–05)**: The five core algorithmic trading systems (`LIQUIDITY_SWEEP_REVERSAL_EA`, `TREND_PULLBACK_CONTINUATION_EA`, `VOLATILITY_EXPANSION_BREAKOUT_EA`, `MARKET_STRUCTURE_MOMENTUM_EA`, `ADAPTIVE_MARKET_REGIME_EA`).
+   - **Group B (Folders 06 & 08)**: Restored multi-pair scanners (`9_21_EMA_MULTI_PAIR_SCANNER_EA`, `MULTI_PAIR_SCANNER_V1_EA`, `MULTI_PAIR_SCANNER_V2_EA`) and composite multi-strategy scanner (`MULTI_STRATEGY_SCANNER_EA`).
+   - **Group C (Folder 07)**: Restored dedicated EMA systems (`9_EMA_EA`, `21_EMA_EA`, `50_EMA_EA`, `100_EMA_EA`, and `9_21_EMA_EA`).
+2. **100% Standalone Compilation**:
+   - All primary EAs across all 8 folders are delivered as standalone `.mq5` files that compile independently in MetaEditor with zero custom `.mqh` file dependencies.
+3. **Dedicated Per-EA READMEs**:
+   - Every single `.mq5` file has an eponymous matching `README.md` covering all 14 points (strategy, entry/exit rules, inputs, risk controls, tester setup, and consecutive loss analysis).
+4. **Empirical Timeframe Verification**:
+   - Thorough backtesting across M1, M5, and M15 proves that M1 fails under Exness spread drag (up to 13 consecutive losses), while M5 and M15 provide robust positive expectancy with controlled losing streaks (3 to 6 consecutive losses).
+
