@@ -1,0 +1,44 @@
+# ==============================================================================
+# MetaTrader 5 (MQL5) Git Ignore Rules
+# ==============================================================================
+
+# Compiled Executables & Binaries (Strict Exclusion)
+*.ex5
+*.ex4
+*.dll
+*.so
+*.dylib
+
+# Configuration, Presets & Profiles
+*.set
+*.ini
+*.tpl
+
+# Logs, Cache & History
+*.log
+*.tmp
+*.dat
+*.bin
+*.tst
+logs/
+cache/
+profiles/
+
+# MetaTrader Strategy Tester Reports & Artifacts
+Tester/
+reports/
+*.htm
+*.html
+
+# IDE & Editor Artifacts
+.idea/
+.vscode/
+*.swp
+*~
+
+# Operating System Artifacts
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+Desktop.ini
