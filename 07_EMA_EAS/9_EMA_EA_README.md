@@ -73,13 +73,26 @@ This EA trades only when the H1 trend agrees (price above H1 9 EMA for longs, be
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `InpEMAPeriod` | int | `9` | Period of the fast EMA |
-| `InpRiskPercent` | double | `2.0` | Risk percentage per trade (Recommend: 0.5% - 1.0%) |
+| `InpHTFTimeframe` | ENUM_TIMEFRAMES | `PERIOD_H1` | Higher timeframe trend filter |
 | `InpTPRatio` | int | `5` | Reward-to-Risk ratio multiplier (1:5) |
+| `InpMinSLPoints` | int | `100` | Minimum SL floor distance in points |
+| `InpRiskPercent` | double | `1.0` | Risk percentage per trade (Hard capped at 1.0% equity) |
+| `InpUseEquityForRisk` | bool | `true` | Risk calculation based on Account Equity (true) or Balance (false) |
+| `InpMaxPositions` | int | `1` | Max concurrent open positions for this symbol & magic number |
+| `InpMaxSpreadPoints` | int | `50` | Maximum allowable spread in points before entry rejection |
+| `InpDeviationPoints` | ulong | `20` | Maximum slippage deviation in points |
 | `InpUseBE` | bool | `true` | Move SL to Break-Even toggle |
-| `InpBEPips` | int | `100` | Points profit to trigger Break-Even |
+| `InpBEPoints` | int | `100` | Points profit to trigger Break-Even |
+| `InpBESafetyPoints` | int | `10` | Profit buffer above/below entry for Break-Even |
+| `InpUseTrailing` | bool | `true` | Enable closed candle structure trailing stop |
+| `InpTrailingStepPoints`| int | `10` | Minimum improvement in points to modify trailing SL |
 | `InpFilterSessions` | bool | `true` | Enable trading session hour restrictions |
-| `InpLondonStartHour`| int | `8` | London session start hour (UK Time) |
-| `InpNYCloseHour` | int | `22` | New York session end hour (UK Time) |
+| `InpLondonStartHour`| int | `8` | London session start hour (Broker Server Time) |
+| `InpNYCloseHour` | int | `22` | New York session end hour (Broker Server Time) |
+| `InpCloseFridayLate` | bool | `true` | Restrict Friday late entries to avoid weekend gaps |
+| `InpFridayCloseHour`| int | `20` | Friday entry cutoff hour (Broker Server Time) |
+| `InpMagicNumber` | ulong | `909001` | Unique EA Magic Number for trade isolation |
+| `InpTradeComment` | string | `"9 EMA PRO Scalper"` | Order execution comment tag |
 
 ---
 

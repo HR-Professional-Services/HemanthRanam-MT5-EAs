@@ -49,3 +49,36 @@ This is an append-only internal project activity log. Every completed change mus
 - **GitHub Push Status**: Pushed and remote verified
 - **Outstanding Issues**: None.
 
+---
+
+## 2026-10-21T23:30:00+01:00 — 9 EMA Scalper Architecture Overhaul & Defect Resolution
+
+- **Change Reference**: Fix critical buffer indexing, symbol isolation, position management, and risk sizing in `07_EMA_EAS/9_EMA_EA.mq5`.
+- **Implementation**:
+  - Corrected indicator array indexing by declaring dynamic buffer arrays (`emaLTF[]`, `emaHTF[]`) and calling `ArraySetAsSeries(..., true)` to eliminate inverted bar comparisons and guarantee closed-bar anti-repainting.
+  - Resolved terminal-wide position blocking by adding `CountActivePositions(_Symbol, InpMagicNumber)` and enforcing strict symbol and magic number isolation across `OnTick()` and `ManagePositions()`.
+  - Added unique `InpMagicNumber` (default `909001`) and configured `trade.SetExpertMagicNumber(...)` and `trade.SetDeviationInPoints(...)`.
+  - Resolved Break-Even / Trailing Stop priority conflict: secured Break-Even stop loss cannot be degraded or widened by subsequent trailing stop moves. Replaced floating-point equality checks with point-delta comparisons.
+  - Enforced 1.0% maximum account equity risk cap per trade (`InpRiskPercent = 1.0`), auto-clamping values above 1.0%. Implemented multi-asset contract normalization using tick value, tick size, volume step, and free margin capacity checks.
+  - Implemented dynamic minimum stop-loss distance calculation using broker `SYMBOL_TRADE_STOPS_LEVEL` and spread buffer.
+  - Added configurable spread filter (`InpMaxSpreadPoints = 50`) and Friday late session close filter.
+  - Added Strategy Tester preset: `Tests_And_Reports/Presets/9_EMA_Gold_Scalper.set`.
+  - Updated `07_EMA_EAS/9_EMA_EA_README.md` with complete input parameter tables and architectural specifications.
+- **Files Modified**:
+  - `07_EMA_EAS/9_EMA_EA.mq5`
+  - `07_EMA_EAS/9_EMA_EA_README.md`
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Files Added**:
+  - `Tests_And_Reports/Presets/9_EMA_Gold_Scalper.set`
+- **Files Deleted**: None.
+- **Reason for Change**: Resolve critical bugs identified during the source audit, prevent account contamination, enforce capital preservation guardrails, and enable robust multi-symbol MT5 execution.
+- **Validation**:
+  - MetaEditor 64-bit compilation: Compiled `07_EMA_EAS/9_EMA_EA.mq5` via `MetaEditor64.exe` -> `Result: 0 errors, 0 warnings, 1351 ms elapsed`.
+  - Strategy Tester preset verified against input variables.
+  - Git working tree verified with `git status` and `git diff`.
+- **Git Branch**: `main`
+- **Commit Hash**: PENDING_COMMIT
+- **GitHub Push Status**: PENDING_PUSH
+- **Outstanding Issues**: None.
+
+
