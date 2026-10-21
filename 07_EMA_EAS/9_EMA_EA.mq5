@@ -21,7 +21,7 @@
 input group "=== Strategy Parameters ==="
 input int             InpEMAPeriod         = 9;              // Local EMA Period (Default: 9)
 input ENUM_TIMEFRAMES InpHTFTimeframe      = PERIOD_H1;      // Higher Timeframe Trend Filter
-input int             InpTPRatio           = 5;              // Reward to Risk Ratio (1:N)
+input int             InpTPRatio           = 3;              // Reward to Risk Ratio (1:N, Default: 1:3)
 input int             InpMinSLPoints       = 100;            // Minimum SL Floor Distance (Points)
 
 input group "=== Risk Management ==="

@@ -74,7 +74,7 @@ This EA trades only when the H1 trend agrees (price above H1 9 EMA for longs, be
 | :--- | :--- | :--- | :--- |
 | `InpEMAPeriod` | int | `9` | Period of the fast EMA |
 | `InpHTFTimeframe` | ENUM_TIMEFRAMES | `PERIOD_H1` | Higher timeframe trend filter |
-| `InpTPRatio` | int | `5` | Reward-to-Risk ratio multiplier (1:5) |
+| `InpTPRatio` | int | `3` | Reward-to-Risk ratio multiplier (1:3 default) |
 | `InpMinSLPoints` | int | `100` | Minimum SL floor distance in points |
 | `InpRiskPercent` | double | `1.0` | Risk percentage per trade (Hard capped at 1.0% equity) |
 | `InpUseEquityForRisk` | bool | `true` | Risk calculation based on Account Equity (true) or Balance (false) |

@@ -2,7 +2,7 @@
 ; Recommended for XAUUSD, US500, and GBPUSD on M5
 InpEMAPeriod=9
 InpHTFTimeframe=16385
-InpTPRatio=5
+InpTPRatio=3
 InpMinSLPoints=100
 InpRiskPercent=1.0
 InpUseEquityForRisk=true

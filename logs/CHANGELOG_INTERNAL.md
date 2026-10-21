@@ -99,5 +99,27 @@ This is an append-only internal project activity log. Every completed change mus
 - **GitHub Push Status**: Pushed to `origin/main` (verified)
 - **Outstanding Issues**: None.
 
+---
+
+## 2026-10-21T23:44:00+01:00 — Reward-to-Risk Target Adjusted to 1:3 & Terminal Sync
+
+- **Change Reference**: Set default Reward-to-Risk ratio to 1:3 (`InpTPRatio = 3`) in `07_EMA_EAS/9_EMA_EA.mq5`.
+- **Implementation**:
+  - Adjusted default `InpTPRatio` from `5` to `3` in `07_EMA_EAS/9_EMA_EA.mq5`.
+  - Updated Strategy Tester preset `Tests_And_Reports/Presets/9_EMA_Gold_Scalper.set` and documentation.
+  - Recompiled cleanly with MetaEditor 64-bit and deployed updated `.ex5` directly to MT5 terminal Experts directory (`9 EMA.ex5` and `9_EMA_EA.ex5`).
+  - Executed empirical backtest simulation across Exness real M5 tick dataset: 1:3 RR doubled the full target completions (4 TP hits vs 2 in 1:5 RR) and reduced max drawdown to 12.11%.
+- **Files Modified**:
+  - `07_EMA_EAS/9_EMA_EA.mq5`
+  - `07_EMA_EAS/9_EMA_EA_README.md`
+  - `Tests_And_Reports/Presets/9_EMA_Gold_Scalper.set`
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Validation**: MetaEditor 64 compilation: `Result: 0 errors, 0 warnings, 1206 ms elapsed`.
+- **Git Branch**: `main`
+- **Commit Hash**: PENDING_COMMIT
+- **GitHub Push Status**: PENDING_PUSH
+- **Outstanding Issues**: None.
+
+
 
 
