@@ -81,4 +81,23 @@ This is an append-only internal project activity log. Every completed change mus
 - **GitHub Push Status**: Pushed to `origin/main` (verified)
 - **Outstanding Issues**: None.
 
+---
+
+## 2026-10-21T23:38:00+01:00 — Multi-Broker Point & Pip Multiplier Normalization
+
+- **Change Reference**: Auto-scale pip and point parameters across 3/5 digit broker quotes in `07_EMA_EAS/9_EMA_EA.mq5`.
+- **Implementation**:
+  - Added dynamic multiplier `m_pMult = (_Digits == 3 || _Digits == 5) ? 10.0 : 1.0`.
+  - Normalized `InpMaxSpreadPoints`, `InpMinSLPoints`, `InpBEPoints`, `InpBESafetyPoints`, and `InpTrailingStepPoints` to prevent spread filter blockage on 3-digit gold (`XAUUSD`) and 5-digit forex.
+  - Deployed and compiled directly to active MetaTrader 5 terminal (`D0E8209F77C8CF37AD8BF550E51FF075/MQL5/Experts`).
+- **Files Modified**:
+  - `07_EMA_EAS/9_EMA_EA.mq5`
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Validation**: MetaEditor 64-bit compilation: `0 errors, 0 warnings, 1210 ms elapsed`.
+- **Git Branch**: `main`
+- **Commit Hash**: PENDING_COMMIT
+- **GitHub Push Status**: PENDING_PUSH
+- **Outstanding Issues**: None.
+
+
 

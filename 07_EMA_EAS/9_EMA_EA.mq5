@@ -55,6 +55,7 @@ int                   handleEMA_HTF        = INVALID_HANDLE;
 CTrade                trade;
 CSymbolInfo           m_symbol;
 datetime              lastBarTime          = 0;
+double                m_pMult              = 1.0;            // 3/5 digit point scaling multiplier
 
 //+------------------------------------------------------------------+
 //| Helper: Count Active Positions for Specific Symbol & Magic       |
@@ -84,8 +85,8 @@ double GetMinimumStopDistance()
 {
    double stopLevel = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
    double spread    = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
-   double floorDist = (double)InpMinSLPoints * _Point;
-   return MathMax(floorDist, stopLevel + spread + (5.0 * _Point));
+   double floorDist = (double)InpMinSLPoints * m_pMult * _Point;
+   return MathMax(floorDist, stopLevel + spread + (5.0 * m_pMult * _Point));
 }
 
 //+------------------------------------------------------------------+
@@ -170,14 +171,15 @@ double CalculateLotSize(double slDistancePoints)
 //+------------------------------------------------------------------+
 bool ExecuteTrade(ENUM_ORDER_TYPE type)
 {
-   // Spread filter check
+   // Spread filter check (scaled for 3/5 digit brokers)
    if(InpMaxSpreadPoints > 0)
    {
       int currentSpread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-      if(currentSpread > InpMaxSpreadPoints)
+      int maxAllowedSpread = (int)(InpMaxSpreadPoints * m_pMult);
+      if(currentSpread > maxAllowedSpread)
       {
          PrintFormat("[9_EMA_EA][SPREAD_REJECT] Current spread (%d) exceeds limit (%d) on %s.",
-                     currentSpread, InpMaxSpreadPoints, _Symbol);
+                     currentSpread, maxAllowedSpread, _Symbol);
          return false;
       }
    }
@@ -247,11 +249,14 @@ void ManagePositions()
       // 1. Break-Even Protection Engine
       if(InpUseBE)
       {
+         double beTriggerDist = InpBEPoints * m_pMult * point;
+         double beSafeDist    = InpBESafetyPoints * m_pMult * point;
+
          if(posType == POSITION_TYPE_BUY)
          {
-            if((curPrice - openPrice) >= (InpBEPoints * point))
+            if((curPrice - openPrice) >= beTriggerDist)
             {
-               double desiredBE = NormalizeDouble(openPrice + (InpBESafetyPoints * point), _Digits);
+               double desiredBE = NormalizeDouble(openPrice + beSafeDist, _Digits);
                if(currentSL < desiredBE - (point * 0.5))
                {
                   if(trade.PositionModify(ticket, desiredBE, currentTP))
@@ -269,9 +274,9 @@ void ManagePositions()
          }
          else if(posType == POSITION_TYPE_SELL)
          {
-            if((openPrice - curPrice) >= (InpBEPoints * point))
+            if((openPrice - curPrice) >= beTriggerDist)
             {
-               double desiredBE = NormalizeDouble(openPrice - (InpBESafetyPoints * point), _Digits);
+               double desiredBE = NormalizeDouble(openPrice - beSafeDist, _Digits);
                if(currentSL > desiredBE + (point * 0.5) || currentSL == 0.0)
                {
                   if(trade.PositionModify(ticket, desiredBE, currentTP))
@@ -292,15 +297,18 @@ void ManagePositions()
       // 2. Closed Candle Trailing Stop Engine
       if(InpUseTrailing)
       {
+         double trailStepDist = InpTrailingStepPoints * m_pMult * point;
+         double beSafeDist    = InpBESafetyPoints * m_pMult * point;
+
          if(posType == POSITION_TYPE_BUY)
          {
             double newSL = NormalizeDouble(iLow(_Symbol, _Period, 1), _Digits);
             
             // Ensure trailing step is met and distance from current market price is valid
-            if(newSL > currentSL + (InpTrailingStepPoints * point) && (curPrice - newSL) >= minStopDist)
+            if(newSL > currentSL + trailStepDist && (curPrice - newSL) >= minStopDist)
             {
                // Never degrade an already secured Break-Even stop
-               if(!beTriggered || newSL >= (openPrice + (InpBESafetyPoints * point)))
+               if(!beTriggered || newSL >= (openPrice + beSafeDist))
                {
                   if(trade.PositionModify(ticket, newSL, currentTP))
                   {
@@ -313,9 +321,9 @@ void ManagePositions()
          {
             double newSL = NormalizeDouble(iHigh(_Symbol, _Period, 1), _Digits);
             
-            if((currentSL == 0.0 || newSL < currentSL - (InpTrailingStepPoints * point)) && (newSL - curPrice) >= minStopDist)
+            if((currentSL == 0.0 || newSL < currentSL - trailStepDist) && (newSL - curPrice) >= minStopDist)
             {
-               if(!beTriggered || newSL <= (openPrice - (InpBESafetyPoints * point)))
+               if(!beTriggered || newSL <= (openPrice - beSafeDist))
                {
                   if(trade.PositionModify(ticket, newSL, currentTP))
                   {
@@ -338,6 +346,7 @@ int OnInit()
    m_symbol.RefreshRates();
 
    lastBarTime = 0;
+   m_pMult = (_Digits == 3 || _Digits == 5) ? 10.0 : 1.0;
 
    // Enforce strict 1% risk limit
    if(InpRiskPercent > 1.0)
