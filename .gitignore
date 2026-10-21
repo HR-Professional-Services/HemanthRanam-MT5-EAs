@@ -21,7 +21,8 @@
 *.dat
 *.bin
 *.tst
-logs/
+logs/*
+!logs/CHANGELOG_INTERNAL.md
 cache/
 profiles/
 
