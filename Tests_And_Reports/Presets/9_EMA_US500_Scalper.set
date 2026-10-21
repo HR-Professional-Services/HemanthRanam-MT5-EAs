@@ -1,0 +1,23 @@
+; 9 EMA PRO Scalper EA - US500 Index Scalper Preset
+; Symbol: US500, Timeframe: M5, Trend Filter: H1, 1:3 RR, 1% Risk
+InpEMAPeriod=9
+InpHTFTimeframe=16385
+InpTPRatio=3
+InpMinSLPoints=100
+InpRiskPercent=1.0
+InpUseEquityForRisk=true
+InpMaxPositions=1
+InpMaxSpreadPoints=100
+InpDeviationPoints=20
+InpUseBE=true
+InpBEPoints=100
+InpBESafetyPoints=10
+InpUseTrailing=true
+InpTrailingStepPoints=10
+InpFilterSessions=true
+InpLondonStartHour=8
+InpNYCloseHour=22
+InpCloseFridayLate=true
+InpFridayCloseHour=20
+InpMagicNumber=909001
+InpTradeComment=9 EMA PRO Scalper

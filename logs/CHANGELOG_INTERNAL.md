@@ -145,6 +145,31 @@ This is an append-only internal project activity log. Every completed change mus
 - **GitHub Push Status**: Pushed to `origin/main` (verified)
 - **Outstanding Issues**: None.
 
+---
+
+## 2026-10-22T00:03:00+01:00 — US500 M5 Backtest Verification & Failure Analysis
+
+- **Change Reference**: Empirical testing of `9_EMA_EA` on US500 over `2026.01.01` to `2026.10.21` with identical parameters.
+- **Implementation**:
+  - Validated broker specifications for `US500` (digits: 2, point: 0.01, contract_size: 1.0, tick_size: 0.01, tick_value: 0.01).
+  - Executed complete MT5 Strategy Tester simulation over 9,218,803 real ticks across 14,314 bars.
+  - Diagnosed spread friction and premature Break-Even suffocation on index CFDs when using Gold defaults.
+  - Created `Tests_And_Reports/Presets/9_EMA_US500_Scalper.set` and deployed to MT5 tester profiles.
+  - Published comprehensive analysis report in `Tests_And_Reports/07_9_EMA_US500_M5_BACKTEST_REPORT.md`.
+- **Key Metrics**:
+  - Initial Deposit: $10,000.00 USD | Final Balance: $2,541.20 USD (-74.59% net loss)
+  - Profit Factor: 0.86
+  - Total Deals: 3,558 (1,779 trades)
+  - Win Rate: 64.76% (average win $22.92 vs average loss -$48.78, inverted payoff 0.47:1.00)
+- **Files Added**:
+  - `Tests_And_Reports/07_9_EMA_US500_M5_BACKTEST_REPORT.md`
+  - `Tests_And_Reports/Presets/9_EMA_US500_Scalper.set`
+- **Files Modified**:
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Git Branch**: `main`
+- **GitHub Push Status**: Pending commit and sync
+
+
 
 
 
