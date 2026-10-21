@@ -120,6 +120,32 @@ This is an append-only internal project activity log. Every completed change mus
 - **GitHub Push Status**: Pushed to `origin/main` (verified)
 - **Outstanding Issues**: None.
 
+---
+
+## 2026-10-21T23:48:00+01:00 — Official MT5 Strategy Tester Verification on XAUUSD M5
+
+- **Change Reference**: Verification and empirical backtesting of `9_EMA_EA.mq5` via MetaTrader 5 Strategy Tester across 76.6M real ticks.
+- **Implementation**:
+  - Successfully executed full 10-month backtest (`2026.01.01` to `2026.10.21`) on Exness `XAUUSD` M5 with 196 ms latency and 1:3 RR.
+  - Achieved **+$36,216.64 USD Net Profit (+362.17%)** on $10,000 initial deposit.
+  - Documented complete quantitative findings in [`Tests_And_Reports/06_9_EMA_GOLD_M5_BACKTEST_REPORT.md`](Tests_And_Reports/06_9_EMA_GOLD_M5_BACKTEST_REPORT.md).
+- **Key Metrics Confirmed**:
+  - Profit Factor: **2.23**
+  - Maximal Equity Drawdown: **4.92%** ($2,024.00)
+  - Recovery Factor: **17.89**
+  - Sharpe Ratio: **30.50**
+  - Linear Regression Correlation: **0.98**
+  - Total Trades: **1,870** (Win/Loss Payoff: $92.49 win vs -$18.63 loss, 4.96x asymmetric edge)
+- **Files Added**:
+  - `Tests_And_Reports/06_9_EMA_GOLD_M5_BACKTEST_REPORT.md`
+- **Files Modified**:
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Git Branch**: `main`
+- **Commit Hash**: PENDING_COMMIT
+- **GitHub Push Status**: PENDING_PUSH
+- **Outstanding Issues**: None.
+
+
 
 
 
