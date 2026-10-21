@@ -17,26 +17,40 @@
 #include <Trade\PositionInfo.mqh>
 #include <Trade\AccountInfo.mqh>
 
+//--- Asset Profiles
+enum ENUM_ASSET_PROFILE
+{
+   PROFILE_AUTO_DETECT = 0, // Auto-Detect from Chart Symbol
+   PROFILE_XAUUSD      = 1, // Gold (XAUUSD) Optimized Defaults
+   PROFILE_XAGUSD      = 2, // Silver (XAGUSD) Optimized Defaults
+   PROFILE_US500       = 3, // S&P 500 (US500) Optimized Defaults
+   PROFILE_USTEC       = 4, // Nasdaq 100 (USTEC) Optimized Defaults
+   PROFILE_CUSTOM      = 5  // Manual Custom Inputs Below
+};
+
 //--- Input Parameters
+input group "=== Asset Profile & Auto-Calibration ==="
+input ENUM_ASSET_PROFILE InpAssetProfile       = PROFILE_AUTO_DETECT; // Asset Volatility Profile
+
 input group "=== Strategy Parameters ==="
 input int             InpEMAPeriod         = 9;              // Local EMA Period (Default: 9)
 input ENUM_TIMEFRAMES InpHTFTimeframe      = PERIOD_H1;      // Higher Timeframe Trend Filter
 input int             InpTPRatio           = 3;              // Reward to Risk Ratio (1:N, Default: 1:3)
-input int             InpMinSLPoints       = 100;            // Minimum SL Floor Distance (Points)
+input int             InpMinSLPoints       = 100;            // Minimum SL Floor Distance (Points, Custom only)
 
 input group "=== Risk Management ==="
 input double          InpRiskPercent       = 1.0;            // Max Risk % per Trade (Account Equity, Max 1.0%)
 input bool            InpUseEquityForRisk  = true;           // Calculate Risk on Equity (true) or Balance (false)
 input int             InpMaxPositions      = 1;              // Max Concurrent Positions for this Symbol & Magic
-input int             InpMaxSpreadPoints   = 50;             // Max Allowed Spread in Points (0 = Disabled)
+input int             InpMaxSpreadPoints   = 50;             // Max Allowed Spread in Points (0 = Disabled, Custom only)
 input ulong           InpDeviationPoints   = 20;             // Max Slippage Deviation (Points)
 
 input group "=== Position Management & Trailing ==="
 input bool            InpUseBE             = true;           // Enable Break-Even Protection
-input int             InpBEPoints          = 100;            // Profit in Points to Trigger Break-Even
-input int             InpBESafetyPoints    = 10;             // Profit Buffer Above/Below Entry for BE (Points)
+input int             InpBEPoints          = 100;            // Profit in Points to Trigger Break-Even (Custom only)
+input int             InpBESafetyPoints    = 10;             // Profit Buffer Above/Below Entry for BE (Points, Custom only)
 input bool            InpUseTrailing       = true;           // Enable Closed Candle Structure Trailing Stop
-input int             InpTrailingStepPoints= 10;             // Minimum Improvement in Points to Modify SL
+input int             InpTrailingStepPoints= 10;             // Minimum Improvement in Points to Modify SL (Custom only)
 
 input group "=== Session Filtering (Broker Time) ==="
 input bool            InpFilterSessions    = true;           // Restrict Trading to Active Market Windows
@@ -55,7 +69,90 @@ int                   handleEMA_HTF        = INVALID_HANDLE;
 CTrade                trade;
 CSymbolInfo           m_symbol;
 datetime              lastBarTime          = 0;
-double                m_pMult              = 1.0;            // 3/5 digit point scaling multiplier
+
+//--- Active Calibrated Parameters (Set dynamically by Auto-Detection or Custom Input)
+int                   activeMaxSpread      = 50;
+int                   activeMinSL          = 100;
+int                   activeBE             = 100;
+int                   activeBESafety       = 10;
+int                   activeTrailStep      = 10;
+string                detectedProfileName  = "Custom";
+
+//+------------------------------------------------------------------+
+//| Apply Multi-Asset Institutional Volatility Calibration           |
+//+------------------------------------------------------------------+
+void ApplyAssetCalibration()
+{
+   ENUM_ASSET_PROFILE profile = InpAssetProfile;
+
+   if(profile == PROFILE_AUTO_DETECT)
+   {
+      string sym = _Symbol;
+      StringToUpper(sym);
+      if(StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0)
+         profile = PROFILE_XAUUSD;
+      else if(StringFind(sym, "XAG") >= 0 || StringFind(sym, "SILVER") >= 0)
+         profile = PROFILE_XAGUSD;
+      else if(StringFind(sym, "500") >= 0 || StringFind(sym, "SPX") >= 0)
+         profile = PROFILE_US500;
+      else if(StringFind(sym, "100") >= 0 || StringFind(sym, "TEC") >= 0 || StringFind(sym, "NAS") >= 0)
+         profile = PROFILE_USTEC;
+      else
+         profile = PROFILE_CUSTOM;
+   }
+
+   switch(profile)
+   {
+      case PROFILE_XAUUSD:
+         activeMaxSpread     = 50;
+         activeMinSL         = 100;
+         activeBE            = 100;
+         activeBESafety      = 10;
+         activeTrailStep     = 10;
+         detectedProfileName = "XAUUSD (Gold Scalper)";
+         break;
+
+      case PROFILE_XAGUSD:
+         activeMaxSpread     = 35;
+         activeMinSL         = 80;
+         activeBE            = 120;
+         activeBESafety      = 15;
+         activeTrailStep     = 15;
+         detectedProfileName = "XAGUSD (Silver Momentum)";
+         break;
+
+      case PROFILE_US500:
+         activeMaxSpread     = 120;
+         activeMinSL         = 350;
+         activeBE            = 500;
+         activeBESafety      = 50;
+         activeTrailStep     = 50;
+         detectedProfileName = "US500 (S&P 500 Index)";
+         break;
+
+      case PROFILE_USTEC:
+         activeMaxSpread     = 300;
+         activeMinSL         = 2500;
+         activeBE            = 3500;
+         activeBESafety      = 300;
+         activeTrailStep     = 300;
+         detectedProfileName = "USTEC (Nasdaq 100 Index)";
+         break;
+
+      case PROFILE_CUSTOM:
+      default:
+         activeMaxSpread     = InpMaxSpreadPoints;
+         activeMinSL         = InpMinSLPoints;
+         activeBE            = InpBEPoints;
+         activeBESafety      = InpBESafetyPoints;
+         activeTrailStep     = InpTrailingStepPoints;
+         detectedProfileName = "Custom Manual Parameters";
+         break;
+   }
+
+   PrintFormat("[9_EMA_EA][CALIBRATION] Symbol: %s | Profile: %s | SpreadLimit: %d | MinSL: %d | BE: %d | BESafety: %d | TrailStep: %d",
+               _Symbol, detectedProfileName, activeMaxSpread, activeMinSL, activeBE, activeBESafety, activeTrailStep);
+}
 
 //+------------------------------------------------------------------+
 //| Helper: Count Active Positions for Specific Symbol & Magic       |
@@ -85,8 +182,8 @@ double GetMinimumStopDistance()
 {
    double stopLevel = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
    double spread    = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
-   double floorDist = (double)InpMinSLPoints * m_pMult * _Point;
-   return MathMax(floorDist, stopLevel + spread + (5.0 * m_pMult * _Point));
+   double floorDist = (double)activeMinSL * _Point;
+   return MathMax(floorDist, stopLevel + spread + (5.0 * _Point));
 }
 
 //+------------------------------------------------------------------+
@@ -116,7 +213,7 @@ bool IsMarketInSession()
 //+------------------------------------------------------------------+
 double CalculateLotSize(double slDistancePoints)
 {
-   if(slDistancePoints <= 0) slDistancePoints = (double)InpMinSLPoints;
+   if(slDistancePoints <= 0) slDistancePoints = (double)activeMinSL;
 
    double baseCapital = InpUseEquityForRisk ? AccountInfoDouble(ACCOUNT_EQUITY) : AccountInfoDouble(ACCOUNT_BALANCE);
    if(baseCapital <= 0) return 0.0;
@@ -171,15 +268,14 @@ double CalculateLotSize(double slDistancePoints)
 //+------------------------------------------------------------------+
 bool ExecuteTrade(ENUM_ORDER_TYPE type)
 {
-   // Spread filter check (scaled for 3/5 digit brokers)
-   if(InpMaxSpreadPoints > 0)
+   // Spread filter check
+   if(activeMaxSpread > 0)
    {
       int currentSpread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-      int maxAllowedSpread = (int)(InpMaxSpreadPoints * m_pMult);
-      if(currentSpread > maxAllowedSpread)
+      if(currentSpread > activeMaxSpread)
       {
          PrintFormat("[9_EMA_EA][SPREAD_REJECT] Current spread (%d) exceeds limit (%d) on %s.",
-                     currentSpread, maxAllowedSpread, _Symbol);
+                     currentSpread, activeMaxSpread, _Symbol);
          return false;
       }
    }
@@ -249,14 +345,11 @@ void ManagePositions()
       // 1. Break-Even Protection Engine
       if(InpUseBE)
       {
-         double beTriggerDist = InpBEPoints * m_pMult * point;
-         double beSafeDist    = InpBESafetyPoints * m_pMult * point;
-
          if(posType == POSITION_TYPE_BUY)
          {
-            if((curPrice - openPrice) >= beTriggerDist)
+            if((curPrice - openPrice) >= (activeBE * point))
             {
-               double desiredBE = NormalizeDouble(openPrice + beSafeDist, _Digits);
+               double desiredBE = NormalizeDouble(openPrice + (activeBESafety * point), _Digits);
                if(currentSL < desiredBE - (point * 0.5))
                {
                   if(trade.PositionModify(ticket, desiredBE, currentTP))
@@ -274,9 +367,9 @@ void ManagePositions()
          }
          else if(posType == POSITION_TYPE_SELL)
          {
-            if((openPrice - curPrice) >= beTriggerDist)
+            if((openPrice - curPrice) >= (activeBE * point))
             {
-               double desiredBE = NormalizeDouble(openPrice - beSafeDist, _Digits);
+               double desiredBE = NormalizeDouble(openPrice - (activeBESafety * point), _Digits);
                if(currentSL > desiredBE + (point * 0.5) || currentSL == 0.0)
                {
                   if(trade.PositionModify(ticket, desiredBE, currentTP))
@@ -297,18 +390,15 @@ void ManagePositions()
       // 2. Closed Candle Trailing Stop Engine
       if(InpUseTrailing)
       {
-         double trailStepDist = InpTrailingStepPoints * m_pMult * point;
-         double beSafeDist    = InpBESafetyPoints * m_pMult * point;
-
          if(posType == POSITION_TYPE_BUY)
          {
             double newSL = NormalizeDouble(iLow(_Symbol, _Period, 1), _Digits);
             
             // Ensure trailing step is met and distance from current market price is valid
-            if(newSL > currentSL + trailStepDist && (curPrice - newSL) >= minStopDist)
+            if(newSL > currentSL + (activeTrailStep * point) && (curPrice - newSL) >= minStopDist)
             {
                // Never degrade an already secured Break-Even stop
-               if(!beTriggered || newSL >= (openPrice + beSafeDist))
+               if(!beTriggered || newSL >= (openPrice + (activeBESafety * point)))
                {
                   if(trade.PositionModify(ticket, newSL, currentTP))
                   {
@@ -321,9 +411,9 @@ void ManagePositions()
          {
             double newSL = NormalizeDouble(iHigh(_Symbol, _Period, 1), _Digits);
             
-            if((currentSL == 0.0 || newSL < currentSL - trailStepDist) && (newSL - curPrice) >= minStopDist)
+            if((currentSL == 0.0 || newSL < currentSL - (activeTrailStep * point)) && (newSL - curPrice) >= minStopDist)
             {
-               if(!beTriggered || newSL <= (openPrice - beSafeDist))
+               if(!beTriggered || newSL <= (openPrice - (activeBESafety * point)))
                {
                   if(trade.PositionModify(ticket, newSL, currentTP))
                   {
@@ -346,7 +436,9 @@ int OnInit()
    m_symbol.RefreshRates();
 
    lastBarTime = 0;
-   m_pMult = (_Digits == 3 || _Digits == 5) ? 10.0 : 1.0;
+
+   // Apply auto-detected or configured asset volatility profile
+   ApplyAssetCalibration();
 
    // Enforce strict 1% risk limit
    if(InpRiskPercent > 1.0)
@@ -357,6 +449,7 @@ int OnInit()
    // Initialize Order Routing Settings
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpDeviationPoints);
+
 
    // Configure execution filling mode based on symbol capabilities
    uint filling = (uint)SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);

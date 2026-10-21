@@ -41,9 +41,34 @@ enum ENUM_TRAILING_MODE
    TRAILING_POINTS     // Fixed Points Trailing
 };
 
+enum ENUM_ASSET_PROFILE
+{
+   PROFILE_AUTO_DETECT = 0, // Auto-Detect from Symbol Name
+   PROFILE_XAUUSD      = 1, // Gold (XAUUSD) Optimized Defaults
+   PROFILE_XAGUSD      = 2, // Silver (XAGUSD) Optimized Defaults
+   PROFILE_US500       = 3, // S&P 500 (US500) Optimized Defaults
+   PROFILE_USTEC       = 4, // Nasdaq 100 (USTEC) Optimized Defaults
+   PROFILE_CUSTOM      = 5  // Manual Custom Inputs Below
+};
+
+struct AssetCalibration
+{
+   int    maxSpread;
+   int    minSL;
+   int    bePoints;
+   int    beSafety;
+   int    trailStep;
+   string profileName;
+};
+
+
 //+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                 |
 //+------------------------------------------------------------------+
+//--- 0. Asset Profile & Auto-Calibration
+input group "=== Asset Profile & Auto-Calibration ==="
+input ENUM_ASSET_PROFILE InpAssetProfile       = PROFILE_AUTO_DETECT; // Asset Volatility Profile
+
 //--- 1. Trading Mode Settings
 input group "=== Trading Mode Settings ==="
 input ENUM_TRADING_MODE InpTradingMode        = AUTO_TRADE;     // Trading Mode
@@ -107,7 +132,11 @@ input double            InpMaxDailyProfitPct   = 5.0;            // Daily Profit
 
 //--- 9. Market Filters
 input group "=== Market Filters ==="
-input double            InpMaxSpreadPoints     = 50.0;           // Maximum Allowed Spread (Points)
+input double            InpMaxSpreadPoints     = 50.0;           // Maximum Allowed Spread (Points, Custom only)
+input int               InpMinSLPoints         = 100;            // Minimum SL Floor Distance (Points, Custom only)
+input int               InpBEPoints            = 100;            // Profit in Points to Trigger BE (Custom only)
+input int               InpBESafetyPoints      = 10;             // Profit Buffer Above/Below Entry (Custom only)
+input int               InpTrailingStepPoints  = 10;             // Trailing Step Distance (Custom only)
 input double            InpMinATRValue         = 0.0001;         // Minimum ATR Volatility Filter
 input double            InpMaxSlippagePoints   = 30.0;           // Maximum Slippage (Points)
 input bool              InpEnableNewsFilter    = false;          // Enable News Filter
@@ -175,6 +204,83 @@ double             g_dayStartBalance      = 0.0;
 int                g_tradesTodayCount     = 0;
 int                g_totalWinsToday       = 0;
 int                g_totalLossesToday     = 0;
+
+//+------------------------------------------------------------------+
+//| Multi-Asset Institutional Volatility Calibration Resolver        |
+//+------------------------------------------------------------------+
+AssetCalibration GetSymbolCalibration(const string sym)
+{
+   AssetCalibration cal;
+   ENUM_ASSET_PROFILE prof = InpAssetProfile;
+
+   if(prof == PROFILE_AUTO_DETECT)
+   {
+      string s = sym;
+      StringToUpper(s);
+      if(StringFind(s, "XAU") >= 0 || StringFind(s, "GOLD") >= 0)
+         prof = PROFILE_XAUUSD;
+      else if(StringFind(s, "XAG") >= 0 || StringFind(s, "SILVER") >= 0)
+         prof = PROFILE_XAGUSD;
+      else if(StringFind(s, "500") >= 0 || StringFind(s, "SPX") >= 0)
+         prof = PROFILE_US500;
+      else if(StringFind(s, "100") >= 0 || StringFind(s, "TEC") >= 0 || StringFind(s, "NAS") >= 0)
+         prof = PROFILE_USTEC;
+      else
+         prof = PROFILE_CUSTOM;
+   }
+
+   switch(prof)
+   {
+      case PROFILE_XAUUSD:
+         cal.maxSpread   = 50;
+         cal.minSL       = 100;
+         cal.bePoints    = 100;
+         cal.beSafety    = 10;
+         cal.trailStep   = 10;
+         cal.profileName = "XAUUSD (Gold Scalper)";
+         break;
+
+      case PROFILE_XAGUSD:
+         cal.maxSpread   = 35;
+         cal.minSL       = 80;
+         cal.bePoints    = 120;
+         cal.beSafety    = 15;
+         cal.trailStep   = 15;
+         cal.profileName = "XAGUSD (Silver Momentum)";
+         break;
+
+      case PROFILE_US500:
+         cal.maxSpread   = 120;
+         cal.minSL       = 350;
+         cal.bePoints    = 500;
+         cal.beSafety    = 50;
+         cal.trailStep   = 50;
+         cal.profileName = "US500 (S&P 500 Index)";
+         break;
+
+      case PROFILE_USTEC:
+         cal.maxSpread   = 300;
+         cal.minSL       = 2500;
+         cal.bePoints    = 3500;
+         cal.beSafety    = 300;
+         cal.trailStep   = 300;
+         cal.profileName = "USTEC (Nasdaq 100 Index)";
+         break;
+
+      case PROFILE_CUSTOM:
+      default:
+         cal.maxSpread   = (int)InpMaxSpreadPoints;
+         cal.minSL       = InpMinSLPoints;
+         cal.bePoints    = InpBEPoints;
+         cal.beSafety    = InpBESafetyPoints;
+         cal.trailStep   = InpTrailingStepPoints;
+         cal.profileName = "Custom Manual Parameters";
+         break;
+   }
+
+   return cal;
+}
+
 
 //+------------------------------------------------------------------+
 //| EXPERT INITIALIZATION FUNCTION                                   |
@@ -432,6 +538,16 @@ void ProcessSymbolStrategy(const int index)
 //+------------------------------------------------------------------+
 void TriggerSignal(const string sym, const int index, const ENUM_ORDER_TYPE orderType, const string reason)
 {
+   // Check Spread Limit dynamically calibrated per symbol
+   AssetCalibration cal = GetSymbolCalibration(sym);
+   int currentSpread = (int)::SymbolInfoInteger(sym, SYMBOL_SPREAD);
+   if(cal.maxSpread > 0 && currentSpread > cal.maxSpread)
+   {
+      ::PrintFormat("[9_21_EMA_EA][SPREAD_REJECT] %s spread (%d pts) exceeds calibrated limit (%d pts). Signal skipped.",
+                    sym, currentSpread, cal.maxSpread);
+      return;
+   }
+
    g_symbols[index].signalFiredThisCross = true;
    g_symbols[index].lastSignalTime       = ::TimeCurrent();
    
@@ -465,6 +581,7 @@ void TriggerSignal(const string sym, const int index, const ENUM_ORDER_TYPE orde
       ExecuteTradeNative(sym, orderType, lotSize, slPrice, tpPrice, reason);
    }
 }
+
 
 //+------------------------------------------------------------------+
 //| NATIVE MQL5 ORDER EXECUTION                                      |
@@ -592,8 +709,18 @@ double CalculateStopLoss(const string sym, const int index, const ENUM_ORDER_TYP
    }
    
    int digits = (int)::SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   
+   // Enforce calibrated minimum Stop Loss distance floor
+   AssetCalibration cal = GetSymbolCalibration(sym);
+   double minSLDist = cal.minSL * point;
+   if(MathAbs(entryPrice - slPrice) < minSLDist)
+   {
+      slPrice = (orderType == ORDER_TYPE_BUY) ? (entryPrice - minSLDist) : (entryPrice + minSLDist);
+   }
+
    return ::NormalizeDouble(slPrice, digits);
 }
+
 
 double CalculateTakeProfit(const string sym, const ENUM_ORDER_TYPE orderType, const double entryPrice, const double slPrice)
 {
@@ -631,28 +758,35 @@ void ManageActiveTrades(const string sym)
       int digits        = (int)::SymbolInfoInteger(sym, SYMBOL_DIGITS);
       
       double slDist = MathAbs(openPrice - currentSL);
+      AssetCalibration cal = GetSymbolCalibration(sym);
       
       // 1. Break Even
       if(InpEnableBreakEven && currentSL != 0.0)
       {
          bool triggerBE = false;
-         if(posType == POSITION_TYPE_BUY && (currentPrice - openPrice) >= (slDist * InpBERrTrigger))
+         double bePointsDist = cal.bePoints * point;
+         double beSafetyDist = cal.beSafety * point;
+
+         if(posType == POSITION_TYPE_BUY && (currentPrice - openPrice) >= bePointsDist)
          {
-            if(currentSL < openPrice) triggerBE = true;
+            double desiredBE = openPrice + beSafetyDist;
+            if(currentSL < desiredBE - (point * 0.5))
+            {
+               ModifyPositionSLTP(ticket, sym, ::NormalizeDouble(desiredBE, digits), currentTP);
+               ::PrintFormat("[9_21_EMA_EA] Break Even Applied on BUY #%I64u @ %.5f", ticket, desiredBE);
+            }
          }
-         else if(posType == POSITION_TYPE_SELL && (openPrice - currentPrice) >= (slDist * InpBERrTrigger))
+         else if(posType == POSITION_TYPE_SELL && (openPrice - currentPrice) >= bePointsDist)
          {
-            if(currentSL > openPrice) triggerBE = true;
-         }
-         
-         if(triggerBE)
-         {
-            double spread = ::SymbolInfoInteger(sym, SYMBOL_SPREAD) * point;
-            double newSL  = (posType == POSITION_TYPE_BUY) ? (openPrice + spread) : (openPrice - spread);
-            ModifyPositionSLTP(ticket, sym, ::NormalizeDouble(newSL, digits), currentTP);
-            ::Print("Break Even Applied on Position #", ticket);
+            double desiredBE = openPrice - beSafetyDist;
+            if(currentSL > desiredBE + (point * 0.5) || currentSL == 0.0)
+            {
+               ModifyPositionSLTP(ticket, sym, ::NormalizeDouble(desiredBE, digits), currentTP);
+               ::PrintFormat("[9_21_EMA_EA] Break Even Applied on SELL #%I64u @ %.5f", ticket, desiredBE);
+            }
          }
       }
+
       
       // 2. Partial Close
       if(InpEnablePartialClose && slDist > 0.0)

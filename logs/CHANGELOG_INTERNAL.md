@@ -171,6 +171,42 @@ This is an append-only internal project activity log. Every completed change mus
 - **GitHub Push Status**: Pushed to `origin/main` (verified)
 - **Outstanding Issues**: None.
 
+---
+
+## 2026-10-22T00:44:00+01:00 — Multi-Asset Auto-Adaptive Volatility Engine Rollout & Preset Suite
+
+- **Change Reference**: Institutional multi-asset self-calibration architecture for `XAUUSD`, `XAGUSD`, `US500`, and `USTEC` applied across repository EAs.
+- **Implementation**:
+  - Engineered `ENUM_ASSET_PROFILE` (`PROFILE_AUTO_DETECT`, `PROFILE_XAUUSD`, `PROFILE_XAGUSD`, `PROFILE_US500`, `PROFILE_USTEC`, `PROFILE_CUSTOM`) across single-file EAs with clean, organized `input group` sections.
+  - Implemented dynamic auto-calibration routines (`ApplyAssetCalibration()` and `GetSymbolCalibration()`) resolving instrument digits, tick values, and volatility thresholds.
+  - Enforced institutional defaults: 1:3 RR (`InpTPRatio = 3`), 1.0% hard-capped equity risk, and closed-bar series validation.
+  - Upgraded `07_EMA_EAS/` suite: `9_EMA_EA.mq5`, `21_EMA_EA.mq5`, `50_EMA_EA.mq5`, `100_EMA_EA.mq5`, and `9_21_EMA_EA.mq5`.
+  - Authored master specification blueprint in `Tests_And_Reports/MULTI_ASSET_CALIBRATION_PROMPT_SPECIFICATION.md`.
+  - Built and deployed calibrated preset suite (`.set`): `9_EMA_XAUUSD.set`, `9_EMA_XAGUSD.set`, `9_EMA_US500.set`, `9_EMA_USTEC.set`.
+- **Validation Performed**:
+  - MetaEditor CLI synchronous compilation verified across all modified targets: 0 errors, 0 warnings.
+  - Verified `.ex5` binaries deployed to MT5 `MQL5\Experts\` directory.
+  - Verified preset profiles deployed to MT5 `MQL5\Profiles\Tester\` directory.
+- **Files Added**:
+  - `Tests_And_Reports/MULTI_ASSET_CALIBRATION_PROMPT_SPECIFICATION.md`
+  - `Tests_And_Reports/Presets/9_EMA_XAUUSD.set`
+  - `Tests_And_Reports/Presets/9_EMA_XAGUSD.set`
+  - `Tests_And_Reports/Presets/9_EMA_US500.set`
+  - `Tests_And_Reports/Presets/9_EMA_USTEC.set`
+- **Files Modified**:
+  - `07_EMA_EAS/9_EMA_EA.mq5`
+  - `07_EMA_EAS/21_EMA_EA.mq5`
+  - `07_EMA_EAS/50_EMA_EA.mq5`
+  - `07_EMA_EAS/100_EMA_EA.mq5`
+  - `07_EMA_EAS/9_21_EMA_EA.mq5`
+  - `Tests_And_Reports/Presets/9_EMA_US500_Scalper.set`
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Git Branch**: `main`
+- **Commit Hash**: Pending commit
+- **GitHub Push Status**: Pending push
+- **Outstanding Issues**: None.
+
+
 
 
 

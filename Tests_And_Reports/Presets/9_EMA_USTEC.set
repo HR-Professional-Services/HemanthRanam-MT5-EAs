@@ -1,0 +1,24 @@
+; 9 EMA PRO Scalper EA - USTEC (Nasdaq 100) Calibrated Preset
+; Symbol: USTEC, Timeframe: M5, Trend Filter: H1, 1:3 RR, 1% Risk
+InpAssetProfile=4
+InpEMAPeriod=9
+InpHTFTimeframe=16385
+InpTPRatio=3
+InpMinSLPoints=2500
+InpRiskPercent=1.0
+InpUseEquityForRisk=true
+InpMaxPositions=1
+InpMaxSpreadPoints=300
+InpDeviationPoints=20
+InpUseBE=true
+InpBEPoints=3500
+InpBESafetyPoints=300
+InpUseTrailing=true
+InpTrailingStepPoints=300
+InpFilterSessions=true
+InpLondonStartHour=8
+InpNYCloseHour=22
+InpCloseFridayLate=true
+InpFridayCloseHour=20
+InpMagicNumber=909001
+InpTradeComment=9 EMA PRO Scalper
