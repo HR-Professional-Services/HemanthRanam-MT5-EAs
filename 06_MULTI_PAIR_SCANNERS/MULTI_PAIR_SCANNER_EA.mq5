@@ -124,9 +124,10 @@ input double   InpMinBOSDistanceATR         = 0.10;      // Min BOS Distance ATR
 input bool     InpRequireCloseBeyondSwing   = true;      // Require Close Beyond Swing
 input int      InpRangeLookback             = 30;        // Range Lookback
 input double   InpRangeMiddleZonePercent    = 20.0;      // Range Middle Zone Percent
-input bool     InpUseVolumeFilter           = false;     // Use Volume Filter
-input int      InpVolumeLookback            = 20;        // Volume Lookback
-input double   InpVolumeMultiplier          = 1.2;       // Volume Multiplier
+input bool     InpUseVolumeFilter           = true;      // Require Volume Confirmation Filter (Anti-Fakeout)
+input int      InpVolumeLookback            = 20;        // Volume Moving Average Lookback (Bars)
+input double   InpVolumeMultiplier          = 1.1;       // Min Volume Multiplier vs Average (Default: 1.1x)
+
 
 input group "=== Trend Runner Management ==="
 input bool     InpEnableTrendRunner         = true;      // Enable Unlimited Trend Runner Mode (Exit on Opposite Cross)
@@ -2138,8 +2139,20 @@ bool EvaluateTier5_TriggerConfirmation(int idx, ENUM_TIMEFRAMES tf, int dir, con
       }
    }
 
+   // 6. Mandatory Volume Confirmation (Anti-Fakeout)
+   if(InpUseVolumeFilter) {
+      string sym = m_scanners[idx].resolvedSymbol;
+      if(!CheckVolumeExpansion(sym, tf, 1)) {
+         diagCode = "TRIGGER_VOLUME";
+         diagReason = "Confirmation candle volume failed volume expansion threshold";
+         return false;
+      }
+   }
+
    return true;
 }
+
+
 
 // TIER 6: Structural Stop Loss & Target Sizing
 bool EvaluateTier6_RiskAndExecution(int idx, ENUM_TIMEFRAMES tf, int dir, double entryPrice, double structuralAnchor, double atr, double &calculatedSL, double &calculatedLot, string &diagCode, string &diagReason) {

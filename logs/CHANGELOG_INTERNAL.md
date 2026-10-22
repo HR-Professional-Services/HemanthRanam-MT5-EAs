@@ -4,6 +4,39 @@ This is an append-only internal project activity log. Every completed change mus
 
 ---
 
+## 2026-10-22T02:25:00+01:00 — Multi-Pair Scanner Consolidation & Mandatory Volume Confirmation Engine
+
+- **Change Reference**: Consolidate `MULTI_PAIR_SCANNER_V2_EA` to permanent `MULTI_PAIR_SCANNER_EA.mq5`, remove deprecated V1, and enforce mandatory volume expansion filter across all EMA-based strategies and scanners to eliminate fakeouts.
+- **Implementation**:
+  - Deprecated and removed `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_V1_EA.mq5` and its directory.
+  - Promoted V2 scanner to canonical `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_EA.mq5` (stripping version numbers from code, inputs, and UI panels).
+  - Architected and integrated standardized `CheckVolumeExpansion(sym, tf, candleIndex)` anti-fakeout filter:
+    - Analyzes trigger candle (bar 1) volume vs. 20-period rolling average (`InpVolumeLookback = 20`).
+    - Enforces volume expansion threshold (`InpVolumeMultiplier = 1.1x` default) using real broker volume when available with seamless tick volume fallback.
+  - Implemented mandatory volume confirmation across all EMA breakout and trend models:
+    - `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_EA.mq5` (Tier 5 trigger volume filter).
+    - `07_EMA_EAS/9_EMA_EA.mq5` (`isVolumeConfirmed` entry gate).
+    - `07_EMA_EAS/21_EMA_EA.mq5` (`isVolumeConfirmed` entry gate).
+    - `07_EMA_EAS/50_EMA_EA.mq5` (`isVolumeConfirmed` entry gate).
+    - `07_EMA_EAS/100_EMA_EA.mq5` (`isVolumeConfirmed` entry gate).
+    - `07_EMA_EAS/9_21_EMA_EA.mq5` (`isVolumeConfirmed` crossover entry gate).
+    - `08_MULTI_STRATEGY_SCANNERS/MULTI_STRATEGY_SCANNER_EA.mq5` (Volume confirmation across Strategy 1, Strategy 2, and Strategy 3).
+- **Files Modified**:
+  - `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_EA.mq5`
+  - `07_EMA_EAS/9_EMA_EA.mq5`
+  - `07_EMA_EAS/21_EMA_EA.mq5`
+  - `07_EMA_EAS/50_EMA_EA.mq5`
+  - `07_EMA_EAS/100_EMA_EA.mq5`
+  - `07_EMA_EAS/9_21_EMA_EA.mq5`
+  - `08_MULTI_STRATEGY_SCANNERS/MULTI_STRATEGY_SCANNER_EA.mq5`
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Validation**:
+  - MetaEditor 64 CLI compilation clean across all updated EAs: 0 errors, 0 warnings.
+- **Git Branch**: `main`
+- **GitHub Push Status**: Synchronizing to `origin/main`.
+
+---
+
 ## 2026-10-21T23:15:00+01:00 — Master IDE Instruction Setup & GitHub Sync
 
 - **Change Reference**: Master IDE Instruction Setup — MT5 EAs Local Repository, GitHub Sync & Audit Log

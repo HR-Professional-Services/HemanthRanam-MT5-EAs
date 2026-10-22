@@ -38,6 +38,12 @@ input ENUM_TIMEFRAMES InpHTFTimeframe      = PERIOD_H1;      // Higher Timeframe
 input int             InpTPRatio           = 3;              // Reward to Risk Ratio (1:N, Default: 1:3)
 input int             InpMinSLPoints       = 100;            // Minimum SL Floor Distance (Points, Custom only)
 
+input group "=== Volume Confirmation Filter ==="
+input bool            InpUseVolumeFilter   = true;           // Require Volume Expansion Confirmation (Anti-Fakeout)
+input int             InpVolumeLookback    = 20;             // Volume Rolling Average Lookback Period
+input double          InpVolumeMultiplier  = 1.1;            // Minimum Volume Multiplier vs Average (Default: 1.1x)
+
+
 input group "=== Risk Management ==="
 input double          InpRiskPercent       = 1.0;            // Max Risk % per Trade (Account Equity, Max 1.0%)
 input bool            InpUseEquityForRisk  = true;           // Calculate Risk on Equity (true) or Balance (false)
@@ -264,10 +270,37 @@ double CalculateLotSize(double slDistancePoints)
 }
 
 //+------------------------------------------------------------------+
+//| Volume Confirmation: Check Volume Expansion on Trigger Candle    |
+//+------------------------------------------------------------------+
+bool CheckVolumeExpansion(string sym, ENUM_TIMEFRAMES tf, int candleIndex = 1)
+{
+   if(!InpUseVolumeFilter) return true;
+
+   long vol[];
+   ArraySetAsSeries(vol, true);
+   if(CopyRealVolume(sym, tf, candleIndex, InpVolumeLookback + 1, vol) <= 0)
+   {
+      if(CopyTickVolume(sym, tf, candleIndex, InpVolumeLookback + 1, vol) <= 0) return true;
+   }
+
+   double sum = 0.0;
+   for(int i = 1; i <= InpVolumeLookback; i++)
+   {
+      sum += (double)vol[i];
+   }
+   double avgVol = sum / (double)InpVolumeLookback;
+
+   if(avgVol <= 0.0) return true;
+
+   return ((double)vol[0] >= avgVol * InpVolumeMultiplier);
+}
+
+//+------------------------------------------------------------------+
 //| Execute Trade with Dynamic Risk Sizing & Execution Guards        |
 //+------------------------------------------------------------------+
 bool ExecuteTrade(ENUM_ORDER_TYPE type)
 {
+
    // Spread filter check
    if(activeMaxSpread > 0)
    {
@@ -530,12 +563,15 @@ void OnTick()
    bool isBullishBias = (htfClose1 > emaHTF[1]);
    bool isBearishBias = (htfClose1 < emaHTF[1]);
 
-   // 7. High-Quality Breakout Setup Filter (Closed bar validation)
-   // - Bullish: Preceding candle (1) closed cleanly ABOVE the EMA (emaLTF[1]), while candle (2) was below or touched it (emaLTF[2]).
-   bool isHighQualityBuy  = isBullishBias && (closePrice1 > emaLTF[1] && closePrice2 <= emaLTF[2] && closePrice1 > openPrice1);
-   bool isHighQualitySell = isBearishBias && (closePrice1 < emaLTF[1] && closePrice2 >= emaLTF[2] && closePrice1 < openPrice1);
+   // 7. Volume Confirmation Filter (Mandatory anti-fakeout expansion on trigger bar)
+   bool isVolumeConfirmed = CheckVolumeExpansion(_Symbol, _Period, 1);
 
-   // 8. Order Execution
+   // 8. High-Quality Breakout Setup Filter (Closed bar validation)
+   // - Bullish: Preceding candle (1) closed cleanly ABOVE the EMA (emaLTF[1]), while candle (2) was below or touched it (emaLTF[2]).
+   bool isHighQualityBuy  = isBullishBias && isVolumeConfirmed && (closePrice1 > emaLTF[1] && closePrice2 <= emaLTF[2] && closePrice1 > openPrice1);
+   bool isHighQualitySell = isBearishBias && isVolumeConfirmed && (closePrice1 < emaLTF[1] && closePrice2 >= emaLTF[2] && closePrice1 < openPrice1);
+
+   // 9. Order Execution
    if(isHighQualityBuy)
    {
       if(ExecuteTrade(ORDER_TYPE_BUY))

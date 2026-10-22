@@ -88,6 +88,12 @@ input ENUM_TIMEFRAMES   InpHigherTF            = PERIOD_H1;      // Higher Timef
 input bool              InpOneSignalPerCross   = true;           // Enable One Signal Per Cross
 input int               InpSignalExpiryMinutes = 60;             // Signal Expiry (Minutes)
 
+input group "=== Volume Confirmation Filter ==="
+input bool              InpUseVolumeFilter     = true;           // Require Volume Expansion Confirmation (Anti-Fakeout)
+input int               InpVolumeLookback      = 20;             // Volume Rolling Average Lookback Period
+input double            InpVolumeMultiplier    = 1.1;            // Minimum Volume Multiplier vs Average (Default: 1.1x)
+
+
 //--- 4. Session Filter Settings
 input group "=== Trading Session Filter ==="
 input bool              InpEnableSessionFilter = true;           // Enable Session Filter
@@ -504,9 +510,12 @@ void ProcessSymbolStrategy(const int index)
       
       if(pullbackInZone && bullishEngulfing)
       {
-         g_symbols[index].statusText = "BUY READY";
-         g_symbols[index].currentSignal = 1;
-         TriggerSignal(sym, index, ORDER_TYPE_BUY, "H1 Bullish Trend + M5 Pullback & Engulfing");
+         if(CheckVolumeExpansion(sym, InpExecutionTF, 1))
+         {
+            g_symbols[index].statusText = "BUY READY";
+            g_symbols[index].currentSignal = 1;
+            TriggerSignal(sym, index, ORDER_TYPE_BUY, "H1 Bullish Trend + M5 Pullback & Engulfing (Vol Confirmed)");
+         }
       }
    }
    
@@ -526,11 +535,41 @@ void ProcessSymbolStrategy(const int index)
       
       if(pullbackInZone && bearishEngulfing)
       {
-         g_symbols[index].statusText = "SELL READY";
-         g_symbols[index].currentSignal = -1;
-         TriggerSignal(sym, index, ORDER_TYPE_SELL, "H1 Bearish Trend + M5 Pullback & Engulfing");
+         if(CheckVolumeExpansion(sym, InpExecutionTF, 1))
+         {
+            g_symbols[index].statusText = "SELL READY";
+            g_symbols[index].currentSignal = -1;
+            TriggerSignal(sym, index, ORDER_TYPE_SELL, "H1 Bearish Trend + M5 Pullback & Engulfing (Vol Confirmed)");
+         }
       }
+
    }
+}
+
+//+------------------------------------------------------------------+
+//| Volume Confirmation: Check Volume Expansion on Trigger Candle    |
+//+------------------------------------------------------------------+
+bool CheckVolumeExpansion(string sym, ENUM_TIMEFRAMES tf, int candleIndex = 1)
+{
+   if(!InpUseVolumeFilter) return true;
+
+   long vol[];
+   ArraySetAsSeries(vol, true);
+   if(CopyRealVolume(sym, tf, candleIndex, InpVolumeLookback + 1, vol) <= 0)
+   {
+      if(CopyTickVolume(sym, tf, candleIndex, InpVolumeLookback + 1, vol) <= 0) return true;
+   }
+
+   double sum = 0.0;
+   for(int i = 1; i <= InpVolumeLookback; i++)
+   {
+      sum += (double)vol[i];
+   }
+   double avgVol = sum / (double)InpVolumeLookback;
+
+   if(avgVol <= 0.0) return true;
+
+   return ((double)vol[0] >= avgVol * InpVolumeMultiplier);
 }
 
 //+------------------------------------------------------------------+
@@ -538,6 +577,7 @@ void ProcessSymbolStrategy(const int index)
 //+------------------------------------------------------------------+
 void TriggerSignal(const string sym, const int index, const ENUM_ORDER_TYPE orderType, const string reason)
 {
+
    // Check Spread Limit dynamically calibrated per symbol
    AssetCalibration cal = GetSymbolCalibration(sym);
    int currentSpread = (int)::SymbolInfoInteger(sym, SYMBOL_SPREAD);

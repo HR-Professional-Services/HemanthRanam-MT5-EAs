@@ -88,10 +88,11 @@ input bool     InpEnableRangeFilter         = false;     // Block Entries in Mid
 input int      InpRangeLookback             = 30;        // Lookback Bars to Determine Range High/Low
 input double   InpRangeMiddleZonePercent    = 40.0;      // Middle No-Trade Zone % (e.g. 30%-70% of Range)
 
-input group "=== Optional Volume Expansion Filter (Default OFF) ==="
-input bool     InpUseVolumeFilter           = false;     // Require Volume Expansion Confirmation (Default: FALSE)
-input double   InpVolumeMultiplier          = 1.2;       // Minimum Volume Multiplier vs 20-period SMA
+input group "=== Optional Volume Expansion Filter ==="
+input bool     InpUseVolumeFilter           = true;      // Require Volume Expansion Confirmation (Anti-Fakeout)
+input double   InpVolumeMultiplier          = 1.1;       // Minimum Volume Multiplier vs 20-period SMA
 input int      InpVolumeLookback            = 20;        // Volume Rolling Average Lookback Period
+
 
 input group "=== Diagnostics & Quality Scoring (Non-Gated) ==="
 input bool     InpEnableDiagnostics         = true;      // Log Detailed Setup Rejection / Approval Diagnostics
@@ -1645,8 +1646,10 @@ void ProcessStrategy1_VWAP(int idx, ENUM_TIMEFRAMES tf, Strategy1_VWAP_State &st
          if(h1Trend != HTF_TREND_BULLISH && h1Trend != HTF_TREND_STRONG_BULLISH) return;
       }
 
-      // Confirmation
+      // Confirmation & Anti-Fakeout Volume Check
       if(!IsBullishConfirmation(open, high, low, close, atr[0])) return;
+      if(InpUseVolumeFilter && !CheckVolumeExpansion(sym, tf, 1)) return;
+
 
       bool isReEntry = state.primaryDone;
       if(isReEntry && (!InpEnableReEntry || state.reEntriesCount >= InpMaxReEntriesPerCycle)) return;
@@ -1694,6 +1697,8 @@ void ProcessStrategy1_VWAP(int idx, ENUM_TIMEFRAMES tf, Strategy1_VWAP_State &st
       }
 
       if(!IsBearishConfirmation(open, high, low, close, atr[0])) return;
+      if(InpUseVolumeFilter && !CheckVolumeExpansion(sym, tf, 1)) return;
+
 
       bool isReEntry = state.primaryDone;
       if(isReEntry && (!InpEnableReEntry || state.reEntriesCount >= InpMaxReEntriesPerCycle)) return;
@@ -1798,6 +1803,8 @@ void ProcessStrategy2_Structure(int idx, ENUM_TIMEFRAMES tf, Strategy2_Structure
          }
 
          if(!IsBullishConfirmation(o, h, l, c, atr[0])) return;
+         if(InpUseVolumeFilter && !CheckVolumeExpansion(sym, tf, 1)) return;
+
 
          bool isReEntry = state.primaryDone;
          if(isReEntry && (!InpEnableReEntry || state.reEntriesCount >= InpMaxReEntriesPerCycle)) return;
@@ -1852,6 +1859,8 @@ void ProcessStrategy2_Structure(int idx, ENUM_TIMEFRAMES tf, Strategy2_Structure
          }
 
          if(!IsBearishConfirmation(o, h, l, c, atr[0])) return;
+         if(InpUseVolumeFilter && !CheckVolumeExpansion(sym, tf, 1)) return;
+
 
          bool isReEntry = state.primaryDone;
          if(isReEntry && (!InpEnableReEntry || state.reEntriesCount >= InpMaxReEntriesPerCycle)) return;
@@ -1947,6 +1956,8 @@ void ProcessStrategy3_Momentum(int idx, ENUM_TIMEFRAMES tf, Strategy3_Momentum_S
          }
 
          if(!IsBullishConfirmation(o, h, l, c, atr[0])) return;
+         if(InpUseVolumeFilter && !CheckVolumeExpansion(sym, tf, 1)) return;
+
 
          bool isReEntry = state.primaryDone;
          if(isReEntry && (!InpEnableReEntry || state.reEntriesCount >= InpMaxReEntriesPerCycle)) return;
@@ -2010,6 +2021,8 @@ void ProcessStrategy3_Momentum(int idx, ENUM_TIMEFRAMES tf, Strategy3_Momentum_S
          }
 
          if(!IsBearishConfirmation(o, h, l, c, atr[0])) return;
+         if(InpUseVolumeFilter && !CheckVolumeExpansion(sym, tf, 1)) return;
+
 
          bool isReEntry = state.primaryDone;
          if(isReEntry && (!InpEnableReEntry || state.reEntriesCount >= InpMaxReEntriesPerCycle)) return;
