@@ -236,8 +236,25 @@ This is an append-only internal project activity log. Every completed change mus
 - **Files Added**:
   - `Documentation/HISTORICAL_DATA_VALIDATION_REPORT.md`
 - **Git Branch**: `main`
-- **GitHub Push Status**: Pending immediate synchronization
+- **GitHub Push Status**: Pushed to `origin/main` (Commit `eef410f`)
 - **Outstanding Issues**: None.
+
+---
+
+## 2026-10-22T02:04:00+01:00 — Mandatory Continuous Git Push Policy
+
+- **Change Reference**: Enforce Continuous GitHub Synchronization Clause for All EA Modifications
+- **Implementation**:
+  - Embedded mandatory clause in `AGENTS.md` (Section 3, Rule 12 & Section 10, Rule 1) mandating immediate commit and push for every single letter change, bug fix, or minor update to EA files.
+  - Updated global `master_engine_rules.md` with Rule 7: Continuous Git Synchronization for EAs.
+  - Updated `C:\MT5_Research_Lab\RESEARCH_LAB_GUIDELINES.md` with the continuous push invariant.
+- **Validation**: Rules inspected and confirmed across repo and global agent configurations.
+- **Files Modified**:
+  - `AGENTS.md`
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Git Branch**: `main`
+- **GitHub Push Status**: Pending immediate synchronization
+
 
 
 

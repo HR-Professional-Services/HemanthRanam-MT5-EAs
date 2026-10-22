@@ -41,6 +41,8 @@ Whenever code, configuration, documentation, tests, or other tracked files chang
 9. **Verify Remote Push**: Check that remote tracking reflects the pushed commit (`git log origin/<branch> -n 1` or GitHub API / CLI).
 10. **Append to Audit Log**: Update `logs/CHANGELOG_INTERNAL.md` with full details. (Group log entry with the change commit when practical, or in an immediate follow-up commit).
 11. **Report Results**: Provide clean report with commit hash, push status, validation outcomes, and audit log link.
+12. **Mandatory Immediate Push Clause**: Even the smallest edit, single-line change, bug fix, or documentation update in EA files or related resources MUST be committed with descriptive details and pushed immediately to `origin/main`. Never leave uncommitted or unpushed modifications in the working tree.
+
 
 ---
 
@@ -144,11 +146,13 @@ Establish a disciplined, professional MT5 EA research methodology to identify wh
 
 ### B. Mandatory Testing Rules
 
-1. **Test Selectively**:
+1. **Test Selectively & Push Every Change**:
    - Never run all EAs or instrument combinations automatically.
    - Test only combinations explicitly approved by the user.
    - Treat every EA–symbol–timeframe combination independently.
-   - Zero live trading, EA logic mutations, Git commits, or remote pushes without explicit authorization.
+   - **Continuous Push Invariant**: Any single letter change, bug fix, parameter calibration, or minor edit in any EA main file or include MUST be immediately committed with descriptive details and pushed to GitHub. Never leave uncommitted or unpushed work behind.
+   - Zero live trading or unauthorized EA trading logic rewrites without explicit instruction.
+
 
 2. **Understand the Strategy First**:
    - Thoroughly inspect the complete EA source code, entry/exit mechanics, indicators, filters, stop-loss/take-profit calculation, position sizing, trading sessions, and risk controls.
