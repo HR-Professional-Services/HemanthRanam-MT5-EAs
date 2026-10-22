@@ -44,3 +44,8 @@ reports/
 ._*
 Thumbs.db
 Desktop.ini
+
+# Research Lab Local Data & Ticks (Strictly kept in C:\MT5_Research_Lab\)
+Research_Lab/
+*.csv
+

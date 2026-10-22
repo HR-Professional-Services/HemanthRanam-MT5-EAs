@@ -206,6 +206,40 @@ This is an append-only internal project activity log. Every completed change mus
 - **GitHub Push Status**: Pushed to `origin/main` (verified)
 - **Outstanding Issues**: None.
 
+---
+
+## 2026-10-22T02:00:00+01:00 — Phase 1 EA Hardening & MT5 Research Lab Methodology
+
+- **Change Reference**: Phase 1 Core EA Suite Hardening, Risk Enforcement, and Disciplined Research Methodology Setup
+- **Implementation**:
+  - Hardened core EAs 01–05 (`LIQUIDITY_SWEEP_REVERSAL_EA`, `TREND_PULLBACK_CONTINUATION_EA`, `VOLATILITY_EXPANSION_BREAKOUT_EA`, `MARKET_STRUCTURE_MOMENTUM_EA`, `ADAPTIVE_MARKET_REGIME_EA`):
+    - Replaced hardcoded spread points with dynamic point scaling based on symbol digits.
+    - Standardized `InpRiskPercent` default to 1.0% with hard-capped portfolio limits in `Include/RiskManager.mqh`.
+    - Enforced closed-bar indicator security and resolved regime classifier indexing in `Include/RegimeClassifier.mqh`.
+  - Added Section 10 to `AGENTS.md` establishing the 10 mandatory MT5 research rules, 7-stage evaluation pipeline, and project restrictions.
+  - Documented historical data validation findings in `Documentation/HISTORICAL_DATA_VALIDATION_REPORT.md` (covering 4,000,018 verified M1 bars across XAUUSD, XAGUSD, US500, USTEC).
+  - Updated `.gitignore` to keep local historical datasets (`Research_Lab/`, `*.csv`) strictly outside Git version control.
+- **Validation Performed**:
+  - MetaEditor synchronous CLI compilation across all 5 modified EAs: 0 errors, 0 warnings.
+  - Git diff inspection: clean changes, zero credentials, zero binary leaks.
+- **Files Modified**:
+  - `01_LIQUIDITY_SWEEP/LIQUIDITY_SWEEP_REVERSAL_EA.mq5`
+  - `02_TREND_PULLBACK/TREND_PULLBACK_CONTINUATION_EA.mq5`
+  - `03_VOLATILITY_BREAKOUT/VOLATILITY_EXPANSION_BREAKOUT_EA.mq5`
+  - `04_STRUCTURE_MOMENTUM/MARKET_STRUCTURE_MOMENTUM_EA.mq5`
+  - `05_ADAPTIVE_REGIME/ADAPTIVE_MARKET_REGIME_EA.mq5`
+  - `Include/RegimeClassifier.mqh`
+  - `Include/RiskManager.mqh`
+  - `AGENTS.md`
+  - `.gitignore`
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Files Added**:
+  - `Documentation/HISTORICAL_DATA_VALIDATION_REPORT.md`
+- **Git Branch**: `main`
+- **GitHub Push Status**: Pending immediate synchronization
+- **Outstanding Issues**: None.
+
+
 
 
 

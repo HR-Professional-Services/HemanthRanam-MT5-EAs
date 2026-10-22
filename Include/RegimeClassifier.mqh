@@ -45,6 +45,13 @@ public:
 
    // Core Classification
    ENUM_MARKET_REGIME DetectRegime(const string symbol, const ENUM_TIMEFRAMES tf);
+   ENUM_MARKET_REGIME DetectRegime(const string symbol, 
+                                   const ENUM_TIMEFRAMES tf,
+                                   const int adxHandle,
+                                   const int fastHandle,
+                                   const int slowHandle,
+                                   const int baseHandle,
+                                   const int atrHandle);
    
    // Formatted Regime Name
    string            GetRegimeName(const ENUM_MARKET_REGIME regime) const;
@@ -83,23 +90,38 @@ void CRegimeClassifier::Init(const int adxPeriod,
 //+------------------------------------------------------------------+
 ENUM_MARKET_REGIME CRegimeClassifier::DetectRegime(const string symbol, const ENUM_TIMEFRAMES tf)
 {
-   int adxHandle = iADX(symbol, tf, m_adxPeriod);
+   int adxHandle  = iADX(symbol, tf, m_adxPeriod);
    int fastHandle = iMA(symbol, tf, m_fastEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
    int slowHandle = iMA(symbol, tf, m_slowEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
    int baseHandle = iMA(symbol, tf, m_baselineEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
    int atrHandle  = iATR(symbol, tf, 14);
 
+   ENUM_MARKET_REGIME res = DetectRegime(symbol, tf, adxHandle, fastHandle, slowHandle, baseHandle, atrHandle);
+
+   if(adxHandle != INVALID_HANDLE)  IndicatorRelease(adxHandle);
+   if(fastHandle != INVALID_HANDLE) IndicatorRelease(fastHandle);
+   if(slowHandle != INVALID_HANDLE) IndicatorRelease(slowHandle);
+   if(baseHandle != INVALID_HANDLE) IndicatorRelease(baseHandle);
+   if(atrHandle != INVALID_HANDLE)  IndicatorRelease(atrHandle);
+
+   return res;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Objective Market Regime Using Persistent Cached Handles   |
+//+------------------------------------------------------------------+
+ENUM_MARKET_REGIME CRegimeClassifier::DetectRegime(const string symbol, 
+                                                   const ENUM_TIMEFRAMES tf,
+                                                   const int adxHandle,
+                                                   const int fastHandle,
+                                                   const int slowHandle,
+                                                   const int baseHandle,
+                                                   const int atrHandle)
+{
    if(adxHandle == INVALID_HANDLE || fastHandle == INVALID_HANDLE ||
       slowHandle == INVALID_HANDLE || baseHandle == INVALID_HANDLE ||
       atrHandle == INVALID_HANDLE)
-   {
-      if(adxHandle != INVALID_HANDLE) IndicatorRelease(adxHandle);
-      if(fastHandle != INVALID_HANDLE) IndicatorRelease(fastHandle);
-      if(slowHandle != INVALID_HANDLE) IndicatorRelease(slowHandle);
-      if(baseHandle != INVALID_HANDLE) IndicatorRelease(baseHandle);
-      if(atrHandle != INVALID_HANDLE) IndicatorRelease(atrHandle);
       return REGIME_UNKNOWN;
-   }
 
    double adxBuf[2];
    double fastBuf[2];
@@ -113,12 +135,6 @@ ENUM_MARKET_REGIME CRegimeClassifier::DetectRegime(const string symbol, const EN
    if(CopyBuffer(slowHandle, 0, 1, 2, slowBuf) < 2) ok = false;
    if(CopyBuffer(baseHandle, 0, 1, 2, baseBuf) < 2) ok = false;
    if(CopyBuffer(atrHandle, 0, 1, 10, atrBuf) < 10) ok = false;
-
-   IndicatorRelease(adxHandle);
-   IndicatorRelease(fastHandle);
-   IndicatorRelease(slowHandle);
-   IndicatorRelease(baseHandle);
-   IndicatorRelease(atrHandle);
 
    if(!ok)
       return REGIME_UNKNOWN;

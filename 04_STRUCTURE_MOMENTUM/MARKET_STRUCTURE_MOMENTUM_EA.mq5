@@ -181,14 +181,18 @@ public:
    
    // Trade Result Feedback
    void              OnTradeClosed(const double netProfit);
+   void              SyncConsecutiveLossesFromHistory(const ulong magicNumber);
    
    // Risk Telemetry
    double            GetDailyDrawdownPercent() const;
    double            GetPortfolioOpenRiskPercent();
+   double            GetPortfolioOpenRiskPercent(bool &hasUnquantifiedRisk, string &unquantifiedDetail);
    int               GetTotalOpenPositions();
    int               GetSymbolOpenPositions(const string symbol);
    bool              IsDailyLimitReached() const;
    bool              IsCooldownActive() const;
+   int               GetCurrentConsecutiveLosses() const { return m_currentConsecutiveLosses; }
+   datetime          GetCooldownUntil() const { return m_cooldownUntil; }
    
    // Emergency Controls
    void              SetEmergencyStop(const bool stopState) { m_emergencyStop = stopState; }
@@ -307,7 +311,14 @@ bool CRiskManager::CanOpenNewTrade(const string symbol, string &rejectReason)
    }
    
    // 6. Portfolio Open Risk Check
-   double currentOpenRisk = GetPortfolioOpenRiskPercent();
+   bool hasUnquantifiedRisk = false;
+   string unquantifiedDetail = "";
+   double currentOpenRisk = GetPortfolioOpenRiskPercent(hasUnquantifiedRisk, unquantifiedDetail);
+   if(hasUnquantifiedRisk)
+   {
+      rejectReason = StringFormat("Risk Guard: %s - new entries blocked", unquantifiedDetail);
+      return false;
+   }
    if(currentOpenRisk + m_riskPercent > m_maxPortfolioRiskPercent)
    {
       rejectReason = StringFormat("Portfolio Open Risk Limit Exceeded (Current: %.2f%%, New: %.2f%%, Max: %.2f%%)",
@@ -419,6 +430,73 @@ void CRiskManager::OnTradeClosed(const double netProfit)
 }
 
 //+------------------------------------------------------------------+
+//| Synchronize Consecutive Losses from Deal History Today           |
+//+------------------------------------------------------------------+
+void CRiskManager::SyncConsecutiveLossesFromHistory(const ulong magicNumber)
+{
+   datetime now = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(now, dt);
+   dt.hour = 0;
+   dt.min = 0;
+   dt.sec = 0;
+   datetime dayStart = StructToTime(dt);
+   
+   if(!HistorySelect(dayStart, now))
+      return;
+      
+   int totalDeals = HistoryDealsTotal();
+   int streak = 0;
+   datetime lastLossTime = 0;
+   
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) continue;
+      
+      long dealMagic = HistoryDealGetInteger(ticket, DEAL_MAGIC);
+      if(dealMagic != (long)magicNumber) continue;
+      
+      ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+      if(dealEntry != DEAL_ENTRY_OUT && dealEntry != DEAL_ENTRY_INOUT && dealEntry != DEAL_ENTRY_OUT_BY)
+         continue;
+         
+      double profit     = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+      double commission = HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+      double swap       = HistoryDealGetDouble(ticket, DEAL_SWAP);
+      double fee        = HistoryDealGetDouble(ticket, DEAL_FEE);
+      double netProfit  = profit + commission + swap + fee;
+      
+      if(netProfit < 0.0)
+      {
+         streak++;
+         lastLossTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+      }
+      else if(netProfit > 0.0)
+      {
+         streak = 0;
+         lastLossTime = 0;
+      }
+   }
+   
+   m_currentConsecutiveLosses = streak;
+   if(m_currentConsecutiveLosses >= m_maxConsecutiveLosses && lastLossTime > 0)
+   {
+      datetime cooldownEnd = lastLossTime + (m_consecutiveLossCooldown * 60);
+      if(cooldownEnd > now)
+      {
+         m_cooldownUntil = cooldownEnd;
+         PrintFormat("[RiskManager] Restored consecutive loss state: %d losses. Cooldown active until %s",
+                     m_currentConsecutiveLosses, TimeToString(m_cooldownUntil, TIME_DATE|TIME_MINUTES));
+      }
+      else
+      {
+         m_cooldownUntil = 0;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Get Current Daily Equity Drawdown %                              |
 //+------------------------------------------------------------------+
 double CRiskManager::GetDailyDrawdownPercent() const
@@ -475,10 +553,22 @@ int CRiskManager::GetSymbolOpenPositions(const string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Aggregate Open Risk % Across All Positions             |
+//| Calculate Aggregate Open Risk % (Default Overload)               |
 //+------------------------------------------------------------------+
 double CRiskManager::GetPortfolioOpenRiskPercent()
 {
+   bool dummyUnquantified = false;
+   string dummyDetail = "";
+   return GetPortfolioOpenRiskPercent(dummyUnquantified, dummyDetail);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Aggregate Open Risk with Missing-SL Protection         |
+//+------------------------------------------------------------------+
+double CRiskManager::GetPortfolioOpenRiskPercent(bool &hasUnquantifiedRisk, string &unquantifiedDetail)
+{
+   hasUnquantifiedRisk = false;
+   unquantifiedDetail = "";
    double totalRiskCurrency = 0.0;
    double equity = m_accInfo.Equity();
    if(equity <= 0.0)
@@ -492,18 +582,47 @@ double CRiskManager::GetPortfolioOpenRiskPercent()
          double sl = m_posInfo.StopLoss();
          double openPrice = m_posInfo.PriceOpen();
          double volume = m_posInfo.Volume();
+         ulong ticket = m_posInfo.Ticket();
          
-         if(sl > 0.0 && m_symInfo.Name(sym))
+         if(!m_symInfo.Name(sym) || !m_symInfo.Refresh())
          {
-            m_symInfo.Refresh();
-            double slDistance = MathAbs(openPrice - sl);
-            double tickSize = m_symInfo.TickSize();
-            double tickValue = m_symInfo.TickValue();
-            if(tickSize > 0.0 && tickValue > 0.0)
-            {
-               double posRisk = (slDistance / tickSize) * tickValue * volume;
-               totalRiskCurrency += posRisk;
-            }
+            hasUnquantifiedRisk = true;
+            unquantifiedDetail = StringFormat("Position #%I64u on '%s' (market specifications unavailable)", ticket, sym);
+            totalRiskCurrency += (volume * openPrice);
+            continue;
+         }
+         
+         // Missing Stop Loss Guard: Never silently ignore an unhedged position
+         if(sl <= 0.0)
+         {
+            hasUnquantifiedRisk = true;
+            unquantifiedDetail = StringFormat("Position #%I64u on '%s' has NO Stop Loss", ticket, sym);
+            
+            // Calculate conservative required margin as exposure proxy
+            double reqMargin = 0.0;
+            ENUM_POSITION_TYPE posType = m_posInfo.PositionType();
+            ENUM_ORDER_TYPE ordType = (posType == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+            if(OrderCalcMargin(ordType, sym, volume, openPrice, reqMargin) && reqMargin > 0.0)
+               totalRiskCurrency += reqMargin;
+            else
+               totalRiskCurrency += (volume * openPrice);
+            continue;
+         }
+         
+         // Quantified Position with Stop Loss
+         double slDistance = MathAbs(openPrice - sl);
+         double tickSize = m_symInfo.TickSize();
+         double tickValue = m_symInfo.TickValue();
+         if(tickSize > 0.0 && tickValue > 0.0)
+         {
+            double posRisk = (slDistance / tickSize) * tickValue * volume;
+            totalRiskCurrency += posRisk;
+         }
+         else
+         {
+            hasUnquantifiedRisk = true;
+            unquantifiedDetail = StringFormat("Position #%I64u on '%s' has invalid tick parameters", ticket, sym);
+            totalRiskCurrency += (volume * openPrice);
          }
       }
    }
@@ -1398,6 +1517,7 @@ CMarketFilters    ExtFilter;
 CLogger           ExtLog;
 
 datetime          ExtLastBarTimes[];
+int               ExtRsiHandles[];
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -1415,6 +1535,7 @@ int OnInit()
    
    ExtRisk.Init(InpRiskPercent, InpMaxDailyDrawdown, InpMaxPortfolioRisk, 
                 InpMaxTotalPositions, InpMaxPositionsPerSymbol, 3, 60);
+   ExtRisk.SyncConsecutiveLossesFromHistory(InpMagicNumber);
                 
    ExtTrade.Init(InpMagicNumber, InpSlippagePoints, InpEnableBreakEven, 
                  InpBreakEvenTriggerR, InpBreakEvenBufferPts, 
@@ -1423,13 +1544,27 @@ int OnInit()
    ExtFilter.Init(InpEnableSessionFilter, InpBrokerGMTOffset, InpTradeAsian, 
                   InpTradeLondon, InpTradeNewYork, InpRolloverBlackout, 30);
                   
-   ArrayResize(ExtLastBarTimes, ExtScanner.GetSymbolCount());
+   int totalSymbols = ExtScanner.GetSymbolCount();
+   ArrayResize(ExtLastBarTimes, totalSymbols);
    ArrayInitialize(ExtLastBarTimes, 0);
+
+   // Pre-allocate and initialize persistent indicator handles
+   ArrayResize(ExtRsiHandles, totalSymbols);
+   for(int i = 0; i < totalSymbols; i++)
+   {
+      string sym = ExtScanner.GetSymbol(i);
+      ExtRsiHandles[i] = iRSI(sym, InpExecutionTF, InpRSIPeriod, PRICE_CLOSE);
+      if(ExtRsiHandles[i] == INVALID_HANDLE)
+      {
+         ExtLog.Warn(StringFormat("Failed to initialize persistent RSI handle for %s on %s", 
+                                  sym, EnumToString(InpExecutionTF)));
+      }
+   }
 
    EventSetTimer(InpScanTimerSeconds);
    
    ExtLog.Info(StringFormat("Initialization complete. Tracking structure shifts across %d instruments.",
-               ExtScanner.GetSymbolCount()));
+               totalSymbols));
    return INIT_SUCCEEDED;
 }
 
@@ -1439,6 +1574,18 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   
+   // Cleanly release all persistent cached handles
+   int total = ArraySize(ExtRsiHandles);
+   for(int i = 0; i < total; i++)
+   {
+      if(ExtRsiHandles[i] != INVALID_HANDLE)
+      {
+         IndicatorRelease(ExtRsiHandles[i]);
+         ExtRsiHandles[i] = INVALID_HANDLE;
+      }
+   }
+   
    ExtLog.Info(StringFormat("EA Deinitialized. Reason code: %d", reason));
 }
 
@@ -1494,18 +1641,22 @@ void ProcessSymbolStructureStrategy(const int symIndex, const string sym)
    if(CopyRates(sym, InpExecutionTF, 1, neededBars, rates) < neededBars)
       return;
       
-   // RSI Handle for Momentum Confirmation
-   int rsiHandle = iRSI(sym, InpExecutionTF, InpRSIPeriod, PRICE_CLOSE);
-   if(rsiHandle == INVALID_HANDLE)
+   // Use Cached RSI Handle for Momentum Confirmation
+   if(symIndex < 0 || symIndex >= ArraySize(ExtRsiHandles))
       return;
       
+   int rsiHandle = ExtRsiHandles[symIndex];
+   if(rsiHandle == INVALID_HANDLE)
+   {
+      ExtRsiHandles[symIndex] = iRSI(sym, InpExecutionTF, InpRSIPeriod, PRICE_CLOSE);
+      rsiHandle = ExtRsiHandles[symIndex];
+      if(rsiHandle == INVALID_HANDLE)
+         return;
+   }
+   
    double rsiBuf[2];
    if(CopyBuffer(rsiHandle, 0, 1, 2, rsiBuf) < 2)
-   {
-      IndicatorRelease(rsiHandle);
       return;
-   }
-   IndicatorRelease(rsiHandle);
    
    ExtLastBarTimes[symIndex] = currentBarTime;
 
@@ -1619,6 +1770,44 @@ void ProcessSymbolStructureStrategy(const int symIndex, const string sym)
                   ExtLog.Signal(sym, "SELL", entryPrice, slPrice, tpPrice,
                                 StringFormat("Bearish BOS break of %.5f with RSI %.1f", recentPivotLow, currentRsi));
                }
+            }
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Trade Transaction Event Handler                                  |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   // Process only newly added deal records
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
+   {
+      ulong dealTicket = trans.deal;
+      if(dealTicket > 0 && HistoryDealSelect(dealTicket))
+      {
+         // Verify deal belongs to this EA via Magic Number
+         long dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+         if(dealMagic == (long)InpMagicNumber)
+         {
+            // Only process exit deals (full or partial closure)
+            ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+            if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT || dealEntry == DEAL_ENTRY_OUT_BY)
+            {
+               double profit     = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+               double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+               double swap       = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+               double fee        = HistoryDealGetDouble(dealTicket, DEAL_FEE);
+               double netProfit  = profit + commission + swap + fee;
+               
+               ExtRisk.OnTradeClosed(netProfit);
+               
+               ExtLog.Info(StringFormat("Trade Closed: Deal #%I64u | Symbol: %s | Net: %.2f (Profit: %.2f, Comm: %.2f, Swap: %.2f, Fee: %.2f) | Streak: %d",
+                                        dealTicket, trans.symbol, netProfit, profit, commission, swap, fee,
+                                        ExtRisk.GetCurrentConsecutiveLosses()));
             }
          }
       }

@@ -181,14 +181,18 @@ public:
    
    // Trade Result Feedback
    void              OnTradeClosed(const double netProfit);
+   void              SyncConsecutiveLossesFromHistory(const ulong magicNumber);
    
    // Risk Telemetry
    double            GetDailyDrawdownPercent() const;
    double            GetPortfolioOpenRiskPercent();
+   double            GetPortfolioOpenRiskPercent(bool &hasUnquantifiedRisk, string &unquantifiedDetail);
    int               GetTotalOpenPositions();
    int               GetSymbolOpenPositions(const string symbol);
    bool              IsDailyLimitReached() const;
    bool              IsCooldownActive() const;
+   int               GetCurrentConsecutiveLosses() const { return m_currentConsecutiveLosses; }
+   datetime          GetCooldownUntil() const { return m_cooldownUntil; }
    
    // Emergency Controls
    void              SetEmergencyStop(const bool stopState) { m_emergencyStop = stopState; }
@@ -307,7 +311,14 @@ bool CRiskManager::CanOpenNewTrade(const string symbol, string &rejectReason)
    }
    
    // 6. Portfolio Open Risk Check
-   double currentOpenRisk = GetPortfolioOpenRiskPercent();
+   bool hasUnquantifiedRisk = false;
+   string unquantifiedDetail = "";
+   double currentOpenRisk = GetPortfolioOpenRiskPercent(hasUnquantifiedRisk, unquantifiedDetail);
+   if(hasUnquantifiedRisk)
+   {
+      rejectReason = StringFormat("Risk Guard: %s - new entries blocked", unquantifiedDetail);
+      return false;
+   }
    if(currentOpenRisk + m_riskPercent > m_maxPortfolioRiskPercent)
    {
       rejectReason = StringFormat("Portfolio Open Risk Limit Exceeded (Current: %.2f%%, New: %.2f%%, Max: %.2f%%)",
@@ -419,6 +430,73 @@ void CRiskManager::OnTradeClosed(const double netProfit)
 }
 
 //+------------------------------------------------------------------+
+//| Synchronize Consecutive Losses from Deal History Today           |
+//+------------------------------------------------------------------+
+void CRiskManager::SyncConsecutiveLossesFromHistory(const ulong magicNumber)
+{
+   datetime now = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(now, dt);
+   dt.hour = 0;
+   dt.min = 0;
+   dt.sec = 0;
+   datetime dayStart = StructToTime(dt);
+   
+   if(!HistorySelect(dayStart, now))
+      return;
+      
+   int totalDeals = HistoryDealsTotal();
+   int streak = 0;
+   datetime lastLossTime = 0;
+   
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) continue;
+      
+      long dealMagic = HistoryDealGetInteger(ticket, DEAL_MAGIC);
+      if(dealMagic != (long)magicNumber) continue;
+      
+      ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+      if(dealEntry != DEAL_ENTRY_OUT && dealEntry != DEAL_ENTRY_INOUT && dealEntry != DEAL_ENTRY_OUT_BY)
+         continue;
+         
+      double profit     = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+      double commission = HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+      double swap       = HistoryDealGetDouble(ticket, DEAL_SWAP);
+      double fee        = HistoryDealGetDouble(ticket, DEAL_FEE);
+      double netProfit  = profit + commission + swap + fee;
+      
+      if(netProfit < 0.0)
+      {
+         streak++;
+         lastLossTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+      }
+      else if(netProfit > 0.0)
+      {
+         streak = 0;
+         lastLossTime = 0;
+      }
+   }
+   
+   m_currentConsecutiveLosses = streak;
+   if(m_currentConsecutiveLosses >= m_maxConsecutiveLosses && lastLossTime > 0)
+   {
+      datetime cooldownEnd = lastLossTime + (m_consecutiveLossCooldown * 60);
+      if(cooldownEnd > now)
+      {
+         m_cooldownUntil = cooldownEnd;
+         PrintFormat("[RiskManager] Restored consecutive loss state: %d losses. Cooldown active until %s",
+                     m_currentConsecutiveLosses, TimeToString(m_cooldownUntil, TIME_DATE|TIME_MINUTES));
+      }
+      else
+      {
+         m_cooldownUntil = 0;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Get Current Daily Equity Drawdown %                              |
 //+------------------------------------------------------------------+
 double CRiskManager::GetDailyDrawdownPercent() const
@@ -475,10 +553,22 @@ int CRiskManager::GetSymbolOpenPositions(const string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Aggregate Open Risk % Across All Positions             |
+//| Calculate Aggregate Open Risk % (Default Overload)               |
 //+------------------------------------------------------------------+
 double CRiskManager::GetPortfolioOpenRiskPercent()
 {
+   bool dummyUnquantified = false;
+   string dummyDetail = "";
+   return GetPortfolioOpenRiskPercent(dummyUnquantified, dummyDetail);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Aggregate Open Risk with Missing-SL Protection         |
+//+------------------------------------------------------------------+
+double CRiskManager::GetPortfolioOpenRiskPercent(bool &hasUnquantifiedRisk, string &unquantifiedDetail)
+{
+   hasUnquantifiedRisk = false;
+   unquantifiedDetail = "";
    double totalRiskCurrency = 0.0;
    double equity = m_accInfo.Equity();
    if(equity <= 0.0)
@@ -492,18 +582,47 @@ double CRiskManager::GetPortfolioOpenRiskPercent()
          double sl = m_posInfo.StopLoss();
          double openPrice = m_posInfo.PriceOpen();
          double volume = m_posInfo.Volume();
+         ulong ticket = m_posInfo.Ticket();
          
-         if(sl > 0.0 && m_symInfo.Name(sym))
+         if(!m_symInfo.Name(sym) || !m_symInfo.Refresh())
          {
-            m_symInfo.Refresh();
-            double slDistance = MathAbs(openPrice - sl);
-            double tickSize = m_symInfo.TickSize();
-            double tickValue = m_symInfo.TickValue();
-            if(tickSize > 0.0 && tickValue > 0.0)
-            {
-               double posRisk = (slDistance / tickSize) * tickValue * volume;
-               totalRiskCurrency += posRisk;
-            }
+            hasUnquantifiedRisk = true;
+            unquantifiedDetail = StringFormat("Position #%I64u on '%s' (market specifications unavailable)", ticket, sym);
+            totalRiskCurrency += (volume * openPrice);
+            continue;
+         }
+         
+         // Missing Stop Loss Guard: Never silently ignore an unhedged position
+         if(sl <= 0.0)
+         {
+            hasUnquantifiedRisk = true;
+            unquantifiedDetail = StringFormat("Position #%I64u on '%s' has NO Stop Loss", ticket, sym);
+            
+            // Calculate conservative required margin as exposure proxy
+            double reqMargin = 0.0;
+            ENUM_POSITION_TYPE posType = m_posInfo.PositionType();
+            ENUM_ORDER_TYPE ordType = (posType == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+            if(OrderCalcMargin(ordType, sym, volume, openPrice, reqMargin) && reqMargin > 0.0)
+               totalRiskCurrency += reqMargin;
+            else
+               totalRiskCurrency += (volume * openPrice);
+            continue;
+         }
+         
+         // Quantified Position with Stop Loss
+         double slDistance = MathAbs(openPrice - sl);
+         double tickSize = m_symInfo.TickSize();
+         double tickValue = m_symInfo.TickValue();
+         if(tickSize > 0.0 && tickValue > 0.0)
+         {
+            double posRisk = (slDistance / tickSize) * tickValue * volume;
+            totalRiskCurrency += posRisk;
+         }
+         else
+         {
+            hasUnquantifiedRisk = true;
+            unquantifiedDetail = StringFormat("Position #%I64u on '%s' has invalid tick parameters", ticket, sym);
+            totalRiskCurrency += (volume * openPrice);
          }
       }
    }
@@ -1395,6 +1514,13 @@ public:
 
    // Core Classification
    ENUM_MARKET_REGIME DetectRegime(const string symbol, const ENUM_TIMEFRAMES tf);
+   ENUM_MARKET_REGIME DetectRegime(const string symbol, 
+                                   const ENUM_TIMEFRAMES tf,
+                                   const int adxHandle,
+                                   const int fastHandle,
+                                   const int slowHandle,
+                                   const int baseHandle,
+                                   const int atrHandle);
    
    // Formatted Regime Name
    string            GetRegimeName(const ENUM_MARKET_REGIME regime) const;
@@ -1433,23 +1559,38 @@ void CRegimeClassifier::Init(const int adxPeriod,
 //+------------------------------------------------------------------+
 ENUM_MARKET_REGIME CRegimeClassifier::DetectRegime(const string symbol, const ENUM_TIMEFRAMES tf)
 {
-   int adxHandle = iADX(symbol, tf, m_adxPeriod);
+   int adxHandle  = iADX(symbol, tf, m_adxPeriod);
    int fastHandle = iMA(symbol, tf, m_fastEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
    int slowHandle = iMA(symbol, tf, m_slowEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
    int baseHandle = iMA(symbol, tf, m_baselineEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
    int atrHandle  = iATR(symbol, tf, 14);
 
+   ENUM_MARKET_REGIME res = DetectRegime(symbol, tf, adxHandle, fastHandle, slowHandle, baseHandle, atrHandle);
+
+   if(adxHandle != INVALID_HANDLE)  IndicatorRelease(adxHandle);
+   if(fastHandle != INVALID_HANDLE) IndicatorRelease(fastHandle);
+   if(slowHandle != INVALID_HANDLE) IndicatorRelease(slowHandle);
+   if(baseHandle != INVALID_HANDLE) IndicatorRelease(baseHandle);
+   if(atrHandle != INVALID_HANDLE)  IndicatorRelease(atrHandle);
+
+   return res;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Objective Market Regime Using Persistent Cached Handles   |
+//+------------------------------------------------------------------+
+ENUM_MARKET_REGIME CRegimeClassifier::DetectRegime(const string symbol, 
+                                                   const ENUM_TIMEFRAMES tf,
+                                                   const int adxHandle,
+                                                   const int fastHandle,
+                                                   const int slowHandle,
+                                                   const int baseHandle,
+                                                   const int atrHandle)
+{
    if(adxHandle == INVALID_HANDLE || fastHandle == INVALID_HANDLE ||
       slowHandle == INVALID_HANDLE || baseHandle == INVALID_HANDLE ||
       atrHandle == INVALID_HANDLE)
-   {
-      if(adxHandle != INVALID_HANDLE) IndicatorRelease(adxHandle);
-      if(fastHandle != INVALID_HANDLE) IndicatorRelease(fastHandle);
-      if(slowHandle != INVALID_HANDLE) IndicatorRelease(slowHandle);
-      if(baseHandle != INVALID_HANDLE) IndicatorRelease(baseHandle);
-      if(atrHandle != INVALID_HANDLE) IndicatorRelease(atrHandle);
       return REGIME_UNKNOWN;
-   }
 
    double adxBuf[2];
    double fastBuf[2];
@@ -1463,12 +1604,6 @@ ENUM_MARKET_REGIME CRegimeClassifier::DetectRegime(const string symbol, const EN
    if(CopyBuffer(slowHandle, 0, 1, 2, slowBuf) < 2) ok = false;
    if(CopyBuffer(baseHandle, 0, 1, 2, baseBuf) < 2) ok = false;
    if(CopyBuffer(atrHandle, 0, 1, 10, atrBuf) < 10) ok = false;
-
-   IndicatorRelease(adxHandle);
-   IndicatorRelease(fastHandle);
-   IndicatorRelease(slowHandle);
-   IndicatorRelease(baseHandle);
-   IndicatorRelease(atrHandle);
 
    if(!ok)
       return REGIME_UNKNOWN;
@@ -1578,7 +1713,19 @@ CMarketFilters    ExtFilter;
 CRegimeClassifier ExtClassifier;
 CLogger           ExtLog;
 
-datetime          ExtLastBarTimes[];
+struct SymbolRegimeHandles
+{
+   int adx;
+   int fastEma;
+   int slowEma;
+   int baseEma;
+   int atr;
+   int bands;
+   int rsi;
+};
+
+datetime             ExtLastBarTimes[];
+SymbolRegimeHandles  ExtHandles[];
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -1596,6 +1743,7 @@ int OnInit()
    
    ExtRisk.Init(InpRiskPercent, InpMaxDailyDrawdown, InpMaxPortfolioRisk, 
                 InpMaxTotalPositions, InpMaxPositionsPerSymbol, 3, 60);
+   ExtRisk.SyncConsecutiveLossesFromHistory(InpMagicNumber);
                 
    ExtTrade.Init(InpMagicNumber, InpSlippagePoints, InpEnableBreakEven, 
                  InpBreakEvenTriggerR, InpBreakEvenBufferPts, 
@@ -1606,12 +1754,36 @@ int OnInit()
                   
    ExtClassifier.Init(InpADXPeriod, InpTrendADXThreshold, InpFastEMA, InpSlowEMA, InpBaselineEMA);
    
-   ArrayResize(ExtLastBarTimes, ExtScanner.GetSymbolCount());
+   int totalSymbols = ExtScanner.GetSymbolCount();
+   ArrayResize(ExtLastBarTimes, totalSymbols);
    ArrayInitialize(ExtLastBarTimes, 0);
+
+   // Pre-allocate and initialize persistent indicator handles
+   ArrayResize(ExtHandles, totalSymbols);
+   for(int i = 0; i < totalSymbols; i++)
+   {
+      string sym = ExtScanner.GetSymbol(i);
+      ExtHandles[i].adx     = iADX(sym, InpExecutionTF, InpADXPeriod);
+      ExtHandles[i].fastEma = iMA(sym, InpExecutionTF, InpFastEMA, 0, MODE_EMA, PRICE_CLOSE);
+      ExtHandles[i].slowEma = iMA(sym, InpExecutionTF, InpSlowEMA, 0, MODE_EMA, PRICE_CLOSE);
+      ExtHandles[i].baseEma = iMA(sym, InpExecutionTF, InpBaselineEMA, 0, MODE_EMA, PRICE_CLOSE);
+      ExtHandles[i].atr     = iATR(sym, InpExecutionTF, 14);
+      ExtHandles[i].bands   = iBands(sym, InpExecutionTF, 20, 0, 2.0, PRICE_CLOSE);
+      ExtHandles[i].rsi     = iRSI(sym, InpExecutionTF, 14, PRICE_CLOSE);
+      
+      if(ExtHandles[i].adx == INVALID_HANDLE || ExtHandles[i].fastEma == INVALID_HANDLE ||
+         ExtHandles[i].slowEma == INVALID_HANDLE || ExtHandles[i].baseEma == INVALID_HANDLE ||
+         ExtHandles[i].atr == INVALID_HANDLE || ExtHandles[i].bands == INVALID_HANDLE ||
+         ExtHandles[i].rsi == INVALID_HANDLE)
+      {
+         ExtLog.Warn(StringFormat("One or more indicator handles failed initialization for %s on %s",
+                                  sym, EnumToString(InpExecutionTF)));
+      }
+   }
 
    EventSetTimer(InpScanTimerSeconds);
    
-   ExtLog.Info(StringFormat("Initialization complete. Active across %d instruments.", ExtScanner.GetSymbolCount()));
+   ExtLog.Info(StringFormat("Initialization complete. Active across %d instruments with persistent cached handles.", totalSymbols));
    return INIT_SUCCEEDED;
 }
 
@@ -1621,6 +1793,20 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   
+   // Cleanly release all persistent cached handles
+   int total = ArraySize(ExtHandles);
+   for(int i = 0; i < total; i++)
+   {
+      if(ExtHandles[i].adx != INVALID_HANDLE)     { IndicatorRelease(ExtHandles[i].adx);     ExtHandles[i].adx = INVALID_HANDLE; }
+      if(ExtHandles[i].fastEma != INVALID_HANDLE) { IndicatorRelease(ExtHandles[i].fastEma); ExtHandles[i].fastEma = INVALID_HANDLE; }
+      if(ExtHandles[i].slowEma != INVALID_HANDLE) { IndicatorRelease(ExtHandles[i].slowEma); ExtHandles[i].slowEma = INVALID_HANDLE; }
+      if(ExtHandles[i].baseEma != INVALID_HANDLE) { IndicatorRelease(ExtHandles[i].baseEma); ExtHandles[i].baseEma = INVALID_HANDLE; }
+      if(ExtHandles[i].atr != INVALID_HANDLE)     { IndicatorRelease(ExtHandles[i].atr);     ExtHandles[i].atr = INVALID_HANDLE; }
+      if(ExtHandles[i].bands != INVALID_HANDLE)   { IndicatorRelease(ExtHandles[i].bands);   ExtHandles[i].bands = INVALID_HANDLE; }
+      if(ExtHandles[i].rsi != INVALID_HANDLE)     { IndicatorRelease(ExtHandles[i].rsi);     ExtHandles[i].rsi = INVALID_HANDLE; }
+   }
+   
    ExtLog.Info(StringFormat("EA Deinitialized. Reason code: %d", reason));
 }
 
@@ -1669,8 +1855,25 @@ void ProcessAdaptiveRegimeStrategy(const int symIndex, const string sym)
    if(!ExtScanner.IsTradePermitted(symIndex, spreadReject))
       return;
 
-   // 1. Detect Objective Market Regime
-   ENUM_MARKET_REGIME currentRegime = ExtClassifier.DetectRegime(sym, InpExecutionTF);
+   if(symIndex < 0 || symIndex >= ArraySize(ExtHandles))
+      return;
+
+   // Controlled lazy reinitialization if any handle was unready at startup
+   if(ExtHandles[symIndex].adx == INVALID_HANDLE)     ExtHandles[symIndex].adx     = iADX(sym, InpExecutionTF, InpADXPeriod);
+   if(ExtHandles[symIndex].fastEma == INVALID_HANDLE) ExtHandles[symIndex].fastEma = iMA(sym, InpExecutionTF, InpFastEMA, 0, MODE_EMA, PRICE_CLOSE);
+   if(ExtHandles[symIndex].slowEma == INVALID_HANDLE) ExtHandles[symIndex].slowEma = iMA(sym, InpExecutionTF, InpSlowEMA, 0, MODE_EMA, PRICE_CLOSE);
+   if(ExtHandles[symIndex].baseEma == INVALID_HANDLE) ExtHandles[symIndex].baseEma = iMA(sym, InpExecutionTF, InpBaselineEMA, 0, MODE_EMA, PRICE_CLOSE);
+   if(ExtHandles[symIndex].atr == INVALID_HANDLE)     ExtHandles[symIndex].atr     = iATR(sym, InpExecutionTF, 14);
+   if(ExtHandles[symIndex].bands == INVALID_HANDLE)   ExtHandles[symIndex].bands   = iBands(sym, InpExecutionTF, 20, 0, 2.0, PRICE_CLOSE);
+   if(ExtHandles[symIndex].rsi == INVALID_HANDLE)     ExtHandles[symIndex].rsi     = iRSI(sym, InpExecutionTF, 14, PRICE_CLOSE);
+
+   // 1. Detect Objective Market Regime Using Persistent Cached Handles
+   ENUM_MARKET_REGIME currentRegime = ExtClassifier.DetectRegime(sym, InpExecutionTF,
+                                                                 ExtHandles[symIndex].adx,
+                                                                 ExtHandles[symIndex].fastEma,
+                                                                 ExtHandles[symIndex].slowEma,
+                                                                 ExtHandles[symIndex].baseEma,
+                                                                 ExtHandles[symIndex].atr);
    
    // Safety: If unstable or high-risk whipsaw, strictly stand aside
    if(currentRegime == REGIME_UNSTABLE_HIGH_RISK || currentRegime == REGIME_UNKNOWN)
@@ -1695,7 +1898,7 @@ void ProcessAdaptiveRegimeStrategy(const int symIndex, const string sym)
    if(currentRegime == REGIME_TREND_BULL)
    {
       // Bullish Trend Module: Enter on shallow pullback to 9 EMA
-      int fastHandle = iMA(sym, InpExecutionTF, InpFastEMA, 0, MODE_EMA, PRICE_CLOSE);
+      int fastHandle = ExtHandles[symIndex].fastEma;
       if(fastHandle != INVALID_HANDLE)
       {
          double fastBuf[2];
@@ -1725,13 +1928,12 @@ void ProcessAdaptiveRegimeStrategy(const int symIndex, const string sym)
                }
             }
          }
-         IndicatorRelease(fastHandle);
       }
    }
    else if(currentRegime == REGIME_TREND_BEAR)
    {
       // Bearish Trend Module: Enter on shallow pullback to 9 EMA
-      int fastHandle = iMA(sym, InpExecutionTF, InpFastEMA, 0, MODE_EMA, PRICE_CLOSE);
+      int fastHandle = ExtHandles[symIndex].fastEma;
       if(fastHandle != INVALID_HANDLE)
       {
          double fastBuf[2];
@@ -1761,7 +1963,6 @@ void ProcessAdaptiveRegimeStrategy(const int symIndex, const string sym)
                }
             }
          }
-         IndicatorRelease(fastHandle);
       }
    }
    
@@ -1771,8 +1972,8 @@ void ProcessAdaptiveRegimeStrategy(const int symIndex, const string sym)
    else if(currentRegime == REGIME_RANGING)
    {
       // Mean reversion using Bollinger Bands & RSI in flat regime
-      int bandsHandle = iBands(sym, InpExecutionTF, 20, 0, 2.0, PRICE_CLOSE);
-      int rsiHandle   = iRSI(sym, InpExecutionTF, 14, PRICE_CLOSE);
+      int bandsHandle = ExtHandles[symIndex].bands;
+      int rsiHandle   = ExtHandles[symIndex].rsi;
       
       if(bandsHandle != INVALID_HANDLE && rsiHandle != INVALID_HANDLE)
       {
@@ -1828,8 +2029,44 @@ void ProcessAdaptiveRegimeStrategy(const int symIndex, const string sym)
                }
             }
          }
-         IndicatorRelease(bandsHandle);
-         IndicatorRelease(rsiHandle);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Trade Transaction Event Handler                                  |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   // Process only newly added deal records
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
+   {
+      ulong dealTicket = trans.deal;
+      if(dealTicket > 0 && HistoryDealSelect(dealTicket))
+      {
+         // Verify deal belongs to this EA via Magic Number
+         long dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+         if(dealMagic == (long)InpMagicNumber)
+         {
+            // Only process exit deals (full or partial closure)
+            ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+            if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT || dealEntry == DEAL_ENTRY_OUT_BY)
+            {
+               double profit     = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+               double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+               double swap       = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+               double fee        = HistoryDealGetDouble(dealTicket, DEAL_FEE);
+               double netProfit  = profit + commission + swap + fee;
+               
+               ExtRisk.OnTradeClosed(netProfit);
+               
+               ExtLog.Info(StringFormat("Trade Closed: Deal #%I64u | Symbol: %s | Net: %.2f (Profit: %.2f, Comm: %.2f, Swap: %.2f, Fee: %.2f) | Streak: %d",
+                                        dealTicket, trans.symbol, netProfit, profit, commission, swap, fee,
+                                        ExtRisk.GetCurrentConsecutiveLosses()));
+            }
+         }
       }
    }
 }
