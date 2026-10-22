@@ -253,7 +253,30 @@ This is an append-only internal project activity log. Every completed change mus
   - `AGENTS.md`
   - `logs/CHANGELOG_INTERNAL.md`
 - **Git Branch**: `main`
+- **GitHub Push Status**: Pushed to `origin/main` (Commit `2390e28`)
+- **Outstanding Issues**: None.
+
+---
+
+## 2026-10-22T02:11:00+01:00 — Multi-Pair Scanner Consolidation & Renaming
+
+- **Change Reference**: Consolidate Multi-Pair Scanner to Canonical `MULTI_PAIR_SCANNER_EA.mq5`
+- **Implementation**:
+  - Removed deprecated `MULTI_PAIR_SCANNER_V1_EA.mq5` and its associated README.
+  - Promoted `MULTI_PAIR_SCANNER_V2_EA.mq5` to permanent production file `MULTI_PAIR_SCANNER_EA.mq5`.
+  - Renamed README to `MULTI_PAIR_SCANNER_EA_README.md`.
+  - Updated internal title and descriptions to match suite conventions.
+- **Validation**: MetaEditor synchronous compilation confirmed `0 errors, 0 warnings`.
+- **Files Deleted**:
+  - `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_V1_EA.mq5`
+  - `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_V1_EA_README.md`
+- **Files Renamed / Modified**:
+  - `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_V2_EA.mq5` -> `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_EA.mq5`
+  - `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_V2_EA_README.md` -> `06_MULTI_PAIR_SCANNERS/MULTI_PAIR_SCANNER_EA_README.md`
+  - `logs/CHANGELOG_INTERNAL.md`
+- **Git Branch**: `main`
 - **GitHub Push Status**: Pending immediate synchronization
+
 
 
 

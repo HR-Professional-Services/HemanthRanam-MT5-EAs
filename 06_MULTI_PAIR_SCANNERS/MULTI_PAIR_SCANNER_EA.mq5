@@ -1,13 +1,14 @@
 //+------------------------------------------------------------------+
-//|                  Multi_Pair_Scanner_V2.mq5                       |
-//|        Multi Pair Scanner V2 - Institutional 6-Tier Engine       |
+//|                  MULTI_PAIR_SCANNER_EA.mq5                       |
+//|            Multi Pair Scanner - Institutional 6-Tier Engine      |
 //+------------------------------------------------------------------+
-// ⚠️ Save this file as UTF-8 in MetaEditor before compiling to ensure 
-// all emojis display correctly in Telegram alerts and reports!
+// Save this file as UTF-8 in MetaEditor before compiling to ensure 
+// all notifications display correctly in alerts and reports.
 #property copyright "Institutional Quantitative Engine"
 #property link      ""
 #property version   "2.00"
-#property description "Multi Pair Scanner V2 - Strict 6-Tier Binary Gate M5 9/21 EMA Pullback System"
+#property description "Multi Pair Scanner - Strict 6-Tier Binary Gate M5 9/21 EMA Pullback System"
+
 
 #include <Trade\Trade.mqh>
 #include <Trade\SymbolInfo.mqh>
