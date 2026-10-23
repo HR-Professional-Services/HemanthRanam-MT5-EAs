@@ -147,8 +147,10 @@ Three `.set` configuration files are available in `Presets/`:
    - Risk: 0.5% per trade, 3% daily DD limit, 5% portfolio risk cap.
 2. `Presets/HR_UNIFIED_CONSERVATIVE_CORE.set`:
    - Ultra-conservative demo mode.
-   - Enables only top-tier verified performers: Nasdaq 9 EMA & 100 EMA + Gold Liquidity Sweep.
-   - Max 2 positions total; Risk: 0.5% per trade, 2% daily DD limit.
+   - Enables strictly three evidence-supported modules: **Nasdaq 100 (USTEC) 9 EMA**, **Nasdaq 100 (USTEC) 100 EMA**, and **S&P 500 (US500) 9 EMA**.
+   - Explicitly disables Gold (XAUUSD), Silver (XAGUSD), all Liquidity Sweeps, and all other 29 strategy-symbol combinations.
+   - **Intentional 2-Position Portfolio Cap:** While three modules are actively scanning, a maximum of 2 positions may be open simultaneously across the portfolio (`InpMaxTotalOpenPositions=2`, `InpMaxPositionsPerSymbol=1`), preventing over-concentration if multiple signals trigger concurrently.
+   - Risk: 0.5% per trade, 2% daily DD limit, 3% portfolio risk cap.
 3. `Presets/HR_UNIFIED_SILVER_RESEARCH.set`:
    - Experimental opt-in preset for Silver research.
    - Risk restricted to 0.25% per trade; 120-minute post-loss cooldown.
@@ -161,15 +163,19 @@ Follow these steps when attaching to a MetaTrader 5 demo account:
 
 1. **Verify Terminal Version:** MetaTrader 5 Build 6200 or higher.
 2. **Compile EA:** Open MetaEditor 64 and compile `00_UNIFIED_SYSTEM/HR_UNIFIED_MULTI_STRATEGY_EA.mq5` (verify 0 errors, 0 warnings).
-3. **Select Execution Chart:** Open any **M5 chart** (recommended: `USTEC` or `XAUUSD`).
+3. **Select Execution Chart:** Open any **M5 chart** (recommended: `USTEC` or `US500`).
 4. **Attach Expert Advisor:** Drag `HR_UNIFIED_MULTI_STRATEGY_EA` onto the chart.
 5. **Enable Algo Trading:**
    - In MT5 toolbar, ensure **Algo Trading** button is green.
    - In the EA inputs dialog, check **Allow Algo Trading**.
-6. **Load Preset:** Click **Load** in the inputs window and select `Presets/HR_UNIFIED_FULL_PORTFOLIO_DEMO.set`.
+6. **Load Desired Preset:**
+   - Click **Inputs** -> **Load**.
+   - For focused conservative evaluation: select `Presets/HR_UNIFIED_CONSERVATIVE_CORE.set` (isolates USTEC 9 EMA, USTEC 100 EMA, US500 9 EMA).
+   - For full portfolio scanning: select `Presets/HR_UNIFIED_FULL_PORTFOLIO_DEMO.set`.
 7. **Verify Broker Symbols:**
    - Observe the on-chart dashboard.
-   - Verify that all 4 assets show `READY 🟢` or `STANDBY 🟡` and that broker mappings (e.g., `XAUUSDm`, `USTECm`) are resolved.
+   - Verify that all active assets show `READY 🟢` or `STANDBY 🟡` and that broker mappings (e.g., `USTECm`, `US500m`) are resolved.
 8. **Emergency Stop Procedure:**
    - To immediately halt all new trading without modifying open positions: Set `InpMasterTradingEnable = false`.
    - To immediately flatten all EA-owned positions: Click MT5 Algo Trading OFF, or right-click position in Trade tab -> Close Position.
+

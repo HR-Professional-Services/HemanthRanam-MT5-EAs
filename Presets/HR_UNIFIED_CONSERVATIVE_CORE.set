@@ -1,6 +1,6 @@
-﻿; Presets/HR_UNIFIED_CONSERVATIVE_CORE.set
+; Presets/HR_UNIFIED_CONSERVATIVE_CORE.set
 ; HR Unified Multi-Strategy Trading System - Conservative Verified Edge Core
-; Enables only top evidence-supported modules on Nasdaq (9 & 100 EMA) and Gold (Sweep)
+; Enables strictly 3 evidence-supported modules: USTEC 9 EMA, USTEC 100 EMA, and US500 9 EMA
 InpMasterTradingEnable=true
 InpPerTradeRiskPercent=0.5
 InpMaxDailyDrawdownPercent=2.0
@@ -21,8 +21,9 @@ InpFridayCloseHourUK=21
 InpFridayCloseMinUK=0
 InpEnableRolloverBlackout=true
 InpShowDashboard=true
-; Gold (XAUUSD)
-InpXAU_EnableSymbol=true
+
+; Gold (XAUUSD) - Disabled
+InpXAU_EnableSymbol=false
 InpXAU_CustomSymbol=XAUUSD
 InpXAU_MaxSpreadPoints=65
 InpXAU_MaxSLPoints=1500
@@ -30,13 +31,26 @@ InpXAU_Enable_9EMA=false
 InpXAU_Enable_21EMA=false
 InpXAU_Enable_50EMA=false
 InpXAU_Enable_100EMA=false
-InpXAU_Enable_LiqSweep=true
+InpXAU_Enable_LiqSweep=false
 InpXAU_Enable_TrendPullback=false
 InpXAU_Enable_VolBreakout=false
 InpXAU_Enable_StructMomentum=false
+
 ; Silver (XAGUSD) - Disabled
 InpXAG_EnableSymbol=false
-; S&P 500 (US500)
+InpXAG_CustomSymbol=XAGUSD
+InpXAG_MaxSpreadPoints=80
+InpXAG_MaxSLPoints=1200
+InpXAG_Enable_9EMA=false
+InpXAG_Enable_21EMA=false
+InpXAG_Enable_50EMA=false
+InpXAG_Enable_100EMA=false
+InpXAG_Enable_LiqSweep=false
+InpXAG_Enable_TrendPullback=false
+InpXAG_Enable_VolBreakout=false
+InpXAG_Enable_StructMomentum=false
+
+; S&P 500 (US500) - Only 9 EMA Enabled
 InpSPX_EnableSymbol=true
 InpSPX_CustomSymbol=US500
 InpSPX_MaxSpreadPoints=50
@@ -45,11 +59,12 @@ InpSPX_Enable_9EMA=true
 InpSPX_Enable_21EMA=false
 InpSPX_Enable_50EMA=false
 InpSPX_Enable_100EMA=false
-InpSPX_Enable_LiqSweep=true
+InpSPX_Enable_LiqSweep=false
 InpSPX_Enable_TrendPullback=false
 InpSPX_Enable_VolBreakout=false
 InpSPX_Enable_StructMomentum=false
-; Nasdaq 100 (USTEC)
+
+; Nasdaq 100 (USTEC) - Only 9 EMA & 100 EMA Enabled
 InpNAS_EnableSymbol=true
 InpNAS_CustomSymbol=USTEC
 InpNAS_MaxSpreadPoints=120
@@ -58,10 +73,11 @@ InpNAS_Enable_9EMA=true
 InpNAS_Enable_21EMA=false
 InpNAS_Enable_50EMA=false
 InpNAS_Enable_100EMA=true
-InpNAS_Enable_LiqSweep=true
+InpNAS_Enable_LiqSweep=false
 InpNAS_Enable_TrendPullback=false
 InpNAS_Enable_VolBreakout=false
 InpNAS_Enable_StructMomentum=false
+
 ; Tuning
 InpDefaultTPRatio=3.0
 InpUseVolumeFilter=true
