@@ -38,6 +38,20 @@ input ENUM_TIMEFRAMES InpHTFTimeframe      = PERIOD_H1;      // Higher Timeframe
 input int             InpTPRatio           = 3;              // Reward to Risk Ratio (1:N, Default: 1:3)
 input int             InpMinSLPoints       = 100;            // Minimum SL Floor Distance (Points, Custom only)
 
+input group "=== Structural Stop-Loss & ATR Protection (Stage 3) ==="
+input bool            InpUseStructuralSL   = true;           // Enable Multi-Bar Swing Structure SL (Completed Bars)
+input int             InpSwingLookback     = 5;              // Swing High/Low Lookback Window (Completed Bars)
+input bool            InpUseATRBuffer      = true;           // Apply ATR Volatility Buffer Beyond Swing Structure
+input int             InpATRPeriod         = 14;             // ATR Smoothing Period
+input double          InpATRMultiplier     = 1.0;            // ATR Multiplier for Safety Buffer (e.g. 1.0x ATR)
+input int             InpMaxSLPoints       = 1000;           // Maximum Defensible SL Guard in Points (0 = Disabled)
+
+input group "=== Trend & Candle Quality Filters ==="
+input bool            InpUseHTFSlopeFilter = false;          // Require HTF EMA Slope Agreement (Completed Bars)
+input double          InpHTFMinSlopePoints = 0.0;            // Minimum HTF Slope in Points (0 = Flat/Positive Only)
+input bool            InpUseBodyQuality    = false;          // Require Minimum Candle Body-to-Range Ratio
+input double          InpMinBodyRatio      = 0.40;           // Minimum Body-to-Range Ratio (e.g. 0.40 = 40%)
+
 input group "=== Volume Confirmation Filter ==="
 input bool            InpUseVolumeFilter   = true;           // Require Volume Expansion Confirmation (Anti-Fakeout)
 input int             InpVolumeLookback    = 20;             // Volume Rolling Average Lookback Period
@@ -54,6 +68,8 @@ input ulong           InpDeviationPoints   = 20;             // Max Slippage Dev
 input group "=== Position Management & Trailing ==="
 input bool            InpUseBE             = true;           // Enable Break-Even Protection
 input int             InpBEPoints          = 100;            // Profit in Points to Trigger Break-Even (Custom only)
+input bool            InpUseATR_BE         = false;          // Enable ATR-Proportional Break-Even Trigger
+input double          InpBEATRMultiplier   = 1.5;            // ATR Multiplier for BE Trigger (e.g. 1.5x ATR)
 input int             InpBESafetyPoints    = 10;             // Profit Buffer Above/Below Entry for BE (Points, Custom only)
 input bool            InpUseTrailing       = true;           // Enable Closed Candle Structure Trailing Stop
 input int             InpTrailingStepPoints= 10;             // Minimum Improvement in Points to Modify SL (Custom only)
@@ -65,6 +81,13 @@ input int             InpNYCloseHour       = 22;             // Session End Hour
 input bool            InpCloseFridayLate   = true;           // Restrict Late Friday Entries (Weekend Risk)
 input int             InpFridayCloseHour   = 20;             // Friday Entry Cutoff Hour (Broker Time)
 
+input group "=== Account-Level Risk Safeguards (Stage 4) ==="
+input bool            InpUseDailyDrawdown  = true;           // Enforce Account Daily Drawdown Limit
+input double          InpMaxDailyDrawdown  = 3.0;            // Max Daily Equity Drawdown Limit (%)
+input bool            InpUsePortfolioRisk  = true;           // Enforce Aggregate Portfolio Open Risk Limit
+input double          InpMaxPortfolioRisk  = 5.0;            // Max Portfolio Open Risk Limit (% Equity)
+input int             InpMaxTotalPositions = 4;              // Max Aggregate Positions Across All EAs & Symbols
+
 input group "=== Order Routing & Isolation ==="
 input ulong           InpMagicNumber       = 909001;         // Unique Magic Number
 input string          InpTradeComment      = "9 EMA PRO Scalper"; // Execution Tag
@@ -72,13 +95,18 @@ input string          InpTradeComment      = "9 EMA PRO Scalper"; // Execution T
 //--- Global Engine Variables
 int                   handleEMA_LTF        = INVALID_HANDLE;
 int                   handleEMA_HTF        = INVALID_HANDLE;
+int                   handleATR            = INVALID_HANDLE;
 CTrade                trade;
 CSymbolInfo           m_symbol;
 datetime              lastBarTime          = 0;
+//--- Stage 4 Account-Level Risk Tracking State
+double                dailyStartEquity     = 0.0;
+int                   lastResetDay         = -1;
 
 //--- Active Calibrated Parameters (Set dynamically by Auto-Detection or Custom Input)
 int                   activeMaxSpread      = 50;
 int                   activeMinSL          = 100;
+int                   activeMaxSL          = 1000;
 int                   activeBE             = 100;
 int                   activeBESafety       = 10;
 int                   activeTrailStep      = 10;
@@ -95,13 +123,15 @@ void ApplyAssetCalibration()
    {
       string sym = _Symbol;
       StringToUpper(sym);
-      if(StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0)
+      
+      // Robust base symbol detection (handles broker prefixes/suffixes like XAUUSDm, rUS500)
+      if(StringFind(sym, "XAUUSD") >= 0 || StringFind(sym, "GOLD") >= 0)
          profile = PROFILE_XAUUSD;
-      else if(StringFind(sym, "XAG") >= 0 || StringFind(sym, "SILVER") >= 0)
+      else if(StringFind(sym, "XAGUSD") >= 0 || StringFind(sym, "SILVER") >= 0)
          profile = PROFILE_XAGUSD;
-      else if(StringFind(sym, "500") >= 0 || StringFind(sym, "SPX") >= 0)
+      else if(StringFind(sym, "US500") >= 0 || StringFind(sym, "SPX500") >= 0 || StringFind(sym, "SP500") >= 0)
          profile = PROFILE_US500;
-      else if(StringFind(sym, "100") >= 0 || StringFind(sym, "TEC") >= 0 || StringFind(sym, "NAS") >= 0)
+      else if(StringFind(sym, "USTEC") >= 0 || StringFind(sym, "NAS100") >= 0 || StringFind(sym, "US100") >= 0 || StringFind(sym, "NDX") >= 0)
          profile = PROFILE_USTEC;
       else
          profile = PROFILE_CUSTOM;
@@ -112,6 +142,7 @@ void ApplyAssetCalibration()
       case PROFILE_XAUUSD:
          activeMaxSpread     = 50;
          activeMinSL         = 100;
+         activeMaxSL         = 2500;
          activeBE            = 100;
          activeBESafety      = 10;
          activeTrailStep     = 10;
@@ -121,6 +152,7 @@ void ApplyAssetCalibration()
       case PROFILE_XAGUSD:
          activeMaxSpread     = 35;
          activeMinSL         = 80;
+         activeMaxSL         = 1500;
          activeBE            = 120;
          activeBESafety      = 15;
          activeTrailStep     = 15;
@@ -130,6 +162,7 @@ void ApplyAssetCalibration()
       case PROFILE_US500:
          activeMaxSpread     = 120;
          activeMinSL         = 350;
+         activeMaxSL         = 1000;
          activeBE            = 500;
          activeBESafety      = 50;
          activeTrailStep     = 50;
@@ -139,6 +172,7 @@ void ApplyAssetCalibration()
       case PROFILE_USTEC:
          activeMaxSpread     = 300;
          activeMinSL         = 2500;
+         activeMaxSL         = 7500;
          activeBE            = 3500;
          activeBESafety      = 300;
          activeTrailStep     = 300;
@@ -149,6 +183,7 @@ void ApplyAssetCalibration()
       default:
          activeMaxSpread     = InpMaxSpreadPoints;
          activeMinSL         = InpMinSLPoints;
+         activeMaxSL         = InpMaxSLPoints;
          activeBE            = InpBEPoints;
          activeBESafety      = InpBESafetyPoints;
          activeTrailStep     = InpTrailingStepPoints;
@@ -156,8 +191,8 @@ void ApplyAssetCalibration()
          break;
    }
 
-   PrintFormat("[9_EMA_EA][CALIBRATION] Symbol: %s | Profile: %s | SpreadLimit: %d | MinSL: %d | BE: %d | BESafety: %d | TrailStep: %d",
-               _Symbol, detectedProfileName, activeMaxSpread, activeMinSL, activeBE, activeBESafety, activeTrailStep);
+   PrintFormat("[9_EMA_EA][CALIBRATION] Symbol: %s | Profile: %s | SpreadLimit: %d | MinSL: %d | MaxSL: %d | BE: %d | BESafety: %d | TrailStep: %d",
+               _Symbol, detectedProfileName, activeMaxSpread, activeMinSL, activeMaxSL, activeBE, activeBESafety, activeTrailStep);
 }
 
 //+------------------------------------------------------------------+
@@ -179,6 +214,16 @@ int CountActivePositions(const string symbol, const ulong magic)
       }
    }
    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Normalize Price strictly to Symbol Tick Size                     |
+//+------------------------------------------------------------------+
+double NormalizePriceToTick(double price)
+{
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(tickSize <= 0.0) return NormalizeDouble(price, _Digits);
+   return NormalizeDouble(MathRound(price / tickSize) * tickSize, _Digits);
 }
 
 //+------------------------------------------------------------------+
@@ -250,7 +295,7 @@ double CalculateLotSize(double slDistancePoints)
 
    double lot = riskAmount / (slDistanceTicks * tickValue);
 
-   // Volume step normalization
+   // Volume step normalization (Strict downward floor to preserve risk cap)
    lot = MathFloor(lot / lotStep) * lotStep;
    lot = NormalizeDouble(lot, 2);
 
@@ -271,28 +316,244 @@ double CalculateLotSize(double slDistancePoints)
 
 //+------------------------------------------------------------------+
 //| Volume Confirmation: Check Volume Expansion on Trigger Candle    |
+//| Note: Broker tick volume is local broker feed, not centralized.  |
+//| Isolates completed trigger bar 1 from baseline bars [2..Lookback+1].|
 //+------------------------------------------------------------------+
 bool CheckVolumeExpansion(string sym, ENUM_TIMEFRAMES tf, int candleIndex = 1)
 {
    if(!InpUseVolumeFilter) return true;
+   if(InpVolumeLookback <= 0) return true;
 
-   long vol[];
-   ArraySetAsSeries(vol, true);
-   if(CopyRealVolume(sym, tf, candleIndex, InpVolumeLookback + 1, vol) <= 0)
+   // 1. Fetch completed trigger candle volume (bar candleIndex)
+   long triggerVol[];
+   ArraySetAsSeries(triggerVol, true);
+   bool triggerOk = (CopyRealVolume(sym, tf, candleIndex, 1, triggerVol) == 1 && triggerVol[0] > 0);
+   bool usingTickVol = false;
+
+   if(!triggerOk)
    {
-      if(CopyTickVolume(sym, tf, candleIndex, InpVolumeLookback + 1, vol) <= 0) return true;
+      triggerOk = (CopyTickVolume(sym, tf, candleIndex, 1, triggerVol) == 1 && triggerVol[0] > 0);
+      usingTickVol = true;
+   }
+
+   if(!triggerOk)
+   {
+      // Missing, zero or invalid trigger volume: reject safely (never confirm silently)
+      return false;
+   }
+
+   // 2. Fetch baseline candles strictly preceding trigger candle [candleIndex + 1 .. candleIndex + InpVolumeLookback]
+   long baselineVol[];
+   ArraySetAsSeries(baselineVol, true);
+   int copied = 0;
+
+   if(!usingTickVol)
+   {
+      copied = CopyRealVolume(sym, tf, candleIndex + 1, InpVolumeLookback, baselineVol);
+      if(copied < InpVolumeLookback)
+      {
+         copied = CopyTickVolume(sym, tf, candleIndex + 1, InpVolumeLookback, baselineVol);
+         usingTickVol = true;
+      }
+   }
+   else
+   {
+      copied = CopyTickVolume(sym, tf, candleIndex + 1, InpVolumeLookback, baselineVol);
+   }
+
+   if(copied < InpVolumeLookback)
+   {
+      // Insufficient baseline history: reject safely
+      return false;
    }
 
    double sum = 0.0;
-   for(int i = 1; i <= InpVolumeLookback; i++)
+   int validCount = 0;
+   for(int i = 0; i < copied; i++)
    {
-      sum += (double)vol[i];
+      if(baselineVol[i] > 0)
+      {
+         sum += (double)baselineVol[i];
+         validCount++;
+      }
    }
-   double avgVol = sum / (double)InpVolumeLookback;
 
-   if(avgVol <= 0.0) return true;
+   if(validCount < (InpVolumeLookback / 2) || sum <= 0.0)
+   {
+      // Unreliable or zero baseline volume: reject safely
+      return false;
+   }
 
-   return ((double)vol[0] >= avgVol * InpVolumeMultiplier);
+   double avgVol = sum / (double)validCount;
+   return ((double)triggerVol[0] >= avgVol * InpVolumeMultiplier);
+}
+
+//+------------------------------------------------------------------+
+//| Stage 4: Check & Reset Daily Baseline Equity at Midnight        |
+//+------------------------------------------------------------------+
+void CheckDailyReset()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   
+   if(dt.day != lastResetDay)
+   {
+      double currentEq = AccountInfoDouble(ACCOUNT_EQUITY);
+      if(currentEq <= 0.0) currentEq = AccountInfoDouble(ACCOUNT_BALANCE);
+      
+      dailyStartEquity = currentEq;
+      lastResetDay     = dt.day;
+      
+      PrintFormat("[9_EMA_EA][RISK_RESET] New trading day detected (Day %02d). Daily baseline equity reset to: %.2f",
+                  dt.day, dailyStartEquity);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Stage 4: Get Current Daily Drawdown Percent                      |
+//+------------------------------------------------------------------+
+double GetDailyDrawdownPercent()
+{
+   CheckDailyReset();
+   if(dailyStartEquity <= 0.0) return 0.0;
+   
+   double currentEq = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(currentEq >= dailyStartEquity) return 0.0;
+   
+   return ((dailyStartEquity - currentEq) / dailyStartEquity) * 100.0;
+}
+
+//+------------------------------------------------------------------+
+//| Stage 4: Calculate Total Open Risk Across Entire Portfolio       |
+//+------------------------------------------------------------------+
+double GetPortfolioOpenRiskPercent(bool &hasUnquantified, string &detail)
+{
+   hasUnquantified = false;
+   detail = "";
+   
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(equity <= 0.0)
+   {
+      hasUnquantified = true;
+      detail = "Account equity is zero or negative.";
+      return 100.0;
+   }
+   
+   double totalOpenRiskCash = 0.0;
+   int totalPositions = PositionsTotal();
+   
+   for(int i = 0; i < totalPositions; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      string posSym   = PositionGetString(POSITION_SYMBOL);
+      long   posType  = PositionGetInteger(POSITION_TYPE);
+      double posVol   = PositionGetDouble(POSITION_VOLUME);
+      double openPx   = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curSL    = PositionGetDouble(POSITION_SL);
+      
+      if(curSL <= 0.0)
+      {
+         hasUnquantified = true;
+         detail = StringFormat("Position #%I64u on %s has no Stop Loss!", ticket, posSym);
+         double marginReq = 0.0;
+         ENUM_ORDER_TYPE ordType = (posType == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+         if(OrderCalcMargin(ordType, posSym, posVol, openPx, marginReq) && marginReq > 0.0)
+            totalOpenRiskCash += marginReq;
+         else
+            totalOpenRiskCash += (posVol * openPx);
+         continue;
+      }
+      
+      double slDist = 0.0;
+      if(posType == POSITION_TYPE_BUY)
+      {
+         if(curSL >= openPx) continue;
+         slDist = openPx - curSL;
+      }
+      else if(posType == POSITION_TYPE_SELL)
+      {
+         if(curSL <= openPx) continue;
+         slDist = curSL - openPx;
+      }
+      
+      double lossCash = 0.0;
+      ENUM_ORDER_TYPE ordType = (posType == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+      if(OrderCalcProfit(ordType, posSym, posVol, openPx, curSL, lossCash))
+      {
+         totalOpenRiskCash += MathAbs(lossCash);
+      }
+      else
+      {
+         double tickSz  = SymbolInfoDouble(posSym, SYMBOL_TRADE_TICK_SIZE);
+         double tickVal = SymbolInfoDouble(posSym, SYMBOL_TRADE_TICK_VALUE);
+         if(tickSz > 0.0 && tickVal > 0.0)
+         {
+            totalOpenRiskCash += (slDist / tickSz) * tickVal * posVol;
+         }
+         else
+         {
+            hasUnquantified = true;
+            detail = StringFormat("Cannot determine tick value for %s.", posSym);
+            totalOpenRiskCash += (posVol * openPx * 0.02);
+         }
+      }
+   }
+   
+   return (totalOpenRiskCash / equity) * 100.0;
+}
+
+//+------------------------------------------------------------------+
+//| Stage 4: Master Account Risk Pre-Trade Check                     |
+//+------------------------------------------------------------------+
+bool CanOpenTradeRiskCheck(string &rejectReason)
+{
+   rejectReason = "";
+   
+   // 1. Max Total Aggregate Positions Check across all EAs/symbols
+   int totalPos = PositionsTotal();
+   if(InpMaxTotalPositions > 0 && totalPos >= InpMaxTotalPositions)
+   {
+      rejectReason = StringFormat("Total active positions (%d) reached aggregate limit (%d).",
+                                  totalPos, InpMaxTotalPositions);
+      return false;
+   }
+   
+   // 2. Daily Drawdown Limit Check
+   if(InpUseDailyDrawdown)
+   {
+      double currentDD = GetDailyDrawdownPercent();
+      if(currentDD >= InpMaxDailyDrawdown)
+      {
+         rejectReason = StringFormat("Daily drawdown limit reached: %.2f%% >= %.2f%% (Baseline: %.2f).",
+                                     currentDD, InpMaxDailyDrawdown, dailyStartEquity);
+         return false;
+      }
+   }
+   
+   // 3. Aggregate Portfolio Open Risk Check
+   if(InpUsePortfolioRisk)
+   {
+      bool hasUnquantified = false;
+      string detail = "";
+      double currentRiskPct = GetPortfolioOpenRiskPercent(hasUnquantified, detail);
+      
+      if(hasUnquantified)
+      {
+         PrintFormat("[9_EMA_EA][RISK_WARNING] Portfolio open risk check noted unquantified position: %s", detail);
+      }
+      
+      double potentialTotalRisk = currentRiskPct + InpRiskPercent;
+      if(potentialTotalRisk > InpMaxPortfolioRisk)
+      {
+         rejectReason = StringFormat("Total open risk (%.2f%% + %.2f%% new = %.2f%%) exceeds portfolio limit (%.2f%%).",
+                                     currentRiskPct, InpRiskPercent, potentialTotalRisk, InpMaxPortfolioRisk);
+         return false;
+      }
+   }
+   
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -300,6 +561,13 @@ bool CheckVolumeExpansion(string sym, ENUM_TIMEFRAMES tf, int candleIndex = 1)
 //+------------------------------------------------------------------+
 bool ExecuteTrade(ENUM_ORDER_TYPE type)
 {
+   // Stage 4: Account-Level Risk Safeguards (Drawdown, Portfolio Open Risk, Max Total Positions)
+   string riskRejectReason = "";
+   if(!CanOpenTradeRiskCheck(riskRejectReason))
+   {
+      PrintFormat("[9_EMA_EA][RISK_REJECT] Trade blocked by account safeguards: %s", riskRejectReason);
+      return false;
+   }
 
    // Spread filter check
    if(activeMaxSpread > 0)
@@ -315,21 +583,111 @@ bool ExecuteTrade(ENUM_ORDER_TYPE type)
 
    m_symbol.RefreshRates();
    double price = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   price = NormalizeDouble(price, _Digits);
+   price = NormalizePriceToTick(price);
 
-   // Derive dynamic Stop Loss from preceding swing structure
-   double rawSwing = (type == ORDER_TYPE_BUY) ? iLow(_Symbol, _Period, 1) : iHigh(_Symbol, _Period, 1);
-   double rawDist  = MathAbs(price - rawSwing);
-   double minSLDist= GetMinimumStopDistance();
-   double slDist   = MathMax(rawDist, minSLDist);
+   // Stage 3: Multi-Bar Structural Swing Stop-Loss with ATR Buffer
+   double rawSwing = 0.0;
+   int lookback = MathMax(1, InpSwingLookback);
+
+   if(InpUseStructuralSL)
+   {
+      if(type == ORDER_TYPE_BUY)
+      {
+         int lowestBar = iLowest(_Symbol, _Period, MODE_LOW, lookback, 1);
+         if(lowestBar < 0)
+         {
+            PrintFormat("[9_EMA_EA][ERROR] Failed to calculate swing low over %d bars. Trade rejected.", lookback);
+            return false;
+         }
+         rawSwing = iLow(_Symbol, _Period, lowestBar);
+      }
+      else
+      {
+         int highestBar = iHighest(_Symbol, _Period, MODE_HIGH, lookback, 1);
+         if(highestBar < 0)
+         {
+            PrintFormat("[9_EMA_EA][ERROR] Failed to calculate swing high over %d bars. Trade rejected.", lookback);
+            return false;
+         }
+         rawSwing = iHigh(_Symbol, _Period, highestBar);
+      }
+   }
+   else
+   {
+      rawSwing = (type == ORDER_TYPE_BUY) ? iLow(_Symbol, _Period, 1) : iHigh(_Symbol, _Period, 1);
+   }
+
+   if(rawSwing <= 0.0)
+   {
+      PrintFormat("[9_EMA_EA][ERROR] Invalid structural swing price (%.5f). Trade rejected.", rawSwing);
+      return false;
+   }
+
+   // Fetch completed ATR buffer for volatility safety buffer
+   double atrBuffer = 0.0;
+   if(InpUseATRBuffer)
+   {
+      if(handleATR == INVALID_HANDLE)
+      {
+         PrintFormat("[9_EMA_EA][ERROR] ATR indicator handle invalid. Trade rejected.");
+         return false;
+      }
+      double atrValues[];
+      ArraySetAsSeries(atrValues, true);
+      if(CopyBuffer(handleATR, 0, 1, 1, atrValues) < 1 || atrValues[0] <= 0.0)
+      {
+         PrintFormat("[9_EMA_EA][ERROR] Failed to fetch valid ATR value on bar 1. Trade rejected.");
+         return false;
+      }
+      atrBuffer = atrValues[0] * MathMax(0.0, InpATRMultiplier);
+   }
+
+   // Construct initial Stop Loss beyond structural extreme
+   double rawDist = 0.0;
+   if(type == ORDER_TYPE_BUY)
+   {
+      double structuralSL = rawSwing - atrBuffer;
+      rawDist = price - structuralSL;
+   }
+   else
+   {
+      double structuralSL = rawSwing + atrBuffer;
+      rawDist = structuralSL - price;
+   }
+
+   // Enforce broker stop level & calibrated minimum floor
+   double minSLDist = GetMinimumStopDistance();
+   double slDist    = MathMax(rawDist, minSLDist);
+
+   // Enforce maximum defensible SL distance guard (calibrated asset ceiling or manual override)
+   int effectiveMaxSL = (activeMaxSL > 0) ? activeMaxSL : InpMaxSLPoints;
+   if(effectiveMaxSL > 0)
+   {
+      double maxAllowedDist = (double)effectiveMaxSL * _Point;
+      if(slDist > maxAllowedDist)
+      {
+         PrintFormat("[9_EMA_EA][SL_REJECT] Calculated SL distance (%.1f pts) exceeds MaxSL limit (%d pts). Trade rejected.",
+                     slDist / _Point, effectiveMaxSL);
+         return false;
+      }
+   }
 
    double sl = (type == ORDER_TYPE_BUY) ? price - slDist : price + slDist;
    double tp = (type == ORDER_TYPE_BUY) ? price + (slDist * InpTPRatio) : price - (slDist * InpTPRatio);
 
-   sl = NormalizeDouble(sl, _Digits);
-   tp = NormalizeDouble(tp, _Digits);
+   sl = NormalizePriceToTick(sl);
+   tp = NormalizePriceToTick(tp);
 
-   double lots = CalculateLotSize(slDist / _Point);
+   // Revalidate final normalized SL distance after tick-size rounding
+   double finalSLDist = MathAbs(price - sl);
+   if(finalSLDist < minSLDist)
+   {
+      PrintFormat("[9_EMA_EA][ERROR] Final normalized SL distance (%.5f) violates broker stop level (%.5f). Trade rejected.",
+                  finalSLDist, minSLDist);
+      return false;
+   }
+
+   double lots = CalculateLotSize(finalSLDist / _Point);
    if(lots <= 0.0)
    {
       PrintFormat("[9_EMA_EA][ERROR] Calculated lot size is 0.0 on %s. Trade aborted.", _Symbol);
@@ -375,14 +733,25 @@ void ManagePositions()
 
       bool beTriggered = false;
 
-      // 1. Break-Even Protection Engine
+      // 1. Break-Even Protection Engine (Fixed Points or Dynamic ATR-Proportional)
       if(InpUseBE)
       {
+         double requiredBEProfitDist = (double)activeBE * point;
+         if(InpUseATR_BE && handleATR != INVALID_HANDLE)
+         {
+            double atrVals[];
+            ArraySetAsSeries(atrVals, true);
+            if(CopyBuffer(handleATR, 0, 1, 1, atrVals) > 0 && atrVals[0] > 0.0)
+            {
+               requiredBEProfitDist = MathMax(requiredBEProfitDist, atrVals[0] * InpBEATRMultiplier);
+            }
+         }
+
          if(posType == POSITION_TYPE_BUY)
          {
-            if((curPrice - openPrice) >= (activeBE * point))
+            if((curPrice - openPrice) >= requiredBEProfitDist)
             {
-               double desiredBE = NormalizeDouble(openPrice + (activeBESafety * point), _Digits);
+               double desiredBE = NormalizePriceToTick(openPrice + (activeBESafety * point));
                if(currentSL < desiredBE - (point * 0.5))
                {
                   if(trade.PositionModify(ticket, desiredBE, currentTP))
@@ -400,9 +769,9 @@ void ManagePositions()
          }
          else if(posType == POSITION_TYPE_SELL)
          {
-            if((openPrice - curPrice) >= (activeBE * point))
+            if((openPrice - curPrice) >= requiredBEProfitDist)
             {
-               double desiredBE = NormalizeDouble(openPrice - (activeBESafety * point), _Digits);
+               double desiredBE = NormalizePriceToTick(openPrice - (activeBESafety * point));
                if(currentSL > desiredBE + (point * 0.5) || currentSL == 0.0)
                {
                   if(trade.PositionModify(ticket, desiredBE, currentTP))
@@ -425,7 +794,7 @@ void ManagePositions()
       {
          if(posType == POSITION_TYPE_BUY)
          {
-            double newSL = NormalizeDouble(iLow(_Symbol, _Period, 1), _Digits);
+            double newSL = NormalizePriceToTick(iLow(_Symbol, _Period, 1));
             
             // Ensure trailing step is met and distance from current market price is valid
             if(newSL > currentSL + (activeTrailStep * point) && (curPrice - newSL) >= minStopDist)
@@ -442,7 +811,7 @@ void ManagePositions()
          }
          else if(posType == POSITION_TYPE_SELL)
          {
-            double newSL = NormalizeDouble(iHigh(_Symbol, _Period, 1), _Digits);
+            double newSL = NormalizePriceToTick(iHigh(_Symbol, _Period, 1));
             
             if((currentSL == 0.0 || newSL < currentSL - (activeTrailStep * point)) && (newSL - curPrice) >= minStopDist)
             {
@@ -496,15 +865,16 @@ int OnInit()
    // Initialize Indicator Handles
    handleEMA_LTF = iMA(_Symbol, _Period, InpEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
    handleEMA_HTF = iMA(_Symbol, InpHTFTimeframe, InpEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   handleATR     = iATR(_Symbol, _Period, MathMax(1, InpATRPeriod));
 
-   if(handleEMA_LTF == INVALID_HANDLE || handleEMA_HTF == INVALID_HANDLE)
+   if(handleEMA_LTF == INVALID_HANDLE || handleEMA_HTF == INVALID_HANDLE || (InpUseATRBuffer && handleATR == INVALID_HANDLE))
    {
       PrintFormat("[9_EMA_EA][FATAL] Failed to initialize indicator handles for %s.", _Symbol);
       return(INIT_FAILED);
    }
 
-   PrintFormat("[9_EMA_EA][INITIALIZED] %s ready. Magic: %I64u | Risk: %.1f%% | HTF: %s",
-               _Symbol, InpMagicNumber, MathMin(InpRiskPercent, 1.0), EnumToString(InpHTFTimeframe));
+   PrintFormat("[9_EMA_EA][INITIALIZED] %s ready. Magic: %I64u | Risk: %.1f%% | HTF: %s | ATRPeriod: %d",
+               _Symbol, InpMagicNumber, MathMin(InpRiskPercent, 1.0), EnumToString(InpHTFTimeframe), InpATRPeriod);
 
    return(INIT_SUCCEEDED);
 }
@@ -516,6 +886,7 @@ void OnDeinit(const int reason)
 {
    if(handleEMA_LTF != INVALID_HANDLE) IndicatorRelease(handleEMA_LTF);
    if(handleEMA_HTF != INVALID_HANDLE) IndicatorRelease(handleEMA_HTF);
+   if(handleATR != INVALID_HANDLE) IndicatorRelease(handleATR);
    PrintFormat("[9_EMA_EA][DEINIT] Clean shutdown completed. Reason code: %d", reason);
 }
 
@@ -549,7 +920,7 @@ void OnTick()
    ArraySetAsSeries(emaLTF, true);
    ArraySetAsSeries(emaHTF, true);
 
-   if(CopyBuffer(handleEMA_LTF, 0, 0, 3, emaLTF) < 3 || CopyBuffer(handleEMA_HTF, 0, 0, 2, emaHTF) < 2)
+   if(CopyBuffer(handleEMA_LTF, 0, 0, 3, emaLTF) < 3 || CopyBuffer(handleEMA_HTF, 0, 0, 3, emaHTF) < 3)
    {
       return;
    }
@@ -557,6 +928,8 @@ void OnTick()
    // Get completed price structures (1 = preceding completed bar, 2 = 2 bars ago)
    double closePrice1 = iClose(_Symbol, _Period, 1);
    double openPrice1  = iOpen(_Symbol, _Period, 1);
+   double highPrice1  = iHigh(_Symbol, _Period, 1);
+   double lowPrice1   = iLow(_Symbol, _Period, 1);
    double closePrice2 = iClose(_Symbol, _Period, 2);
    double htfClose1   = iClose(_Symbol, InpHTFTimeframe, 1);
 
@@ -564,12 +937,34 @@ void OnTick()
    bool isBullishBias = (htfClose1 > emaHTF[1]);
    bool isBearishBias = (htfClose1 < emaHTF[1]);
 
-   // 7. High-Quality Breakout Setup Filter (Closed bar validation with Volume Expansion)
+   // Stage 2: HTF EMA Slope Agreement (Completed Bars: bar 1 vs bar 2)
+   if(InpUseHTFSlopeFilter)
+   {
+      double htfSlopePoints = (emaHTF[1] - emaHTF[2]) / _Point;
+      if(isBullishBias && htfSlopePoints < InpHTFMinSlopePoints)
+         isBullishBias = false;
+      if(isBearishBias && (-htfSlopePoints) < InpHTFMinSlopePoints)
+         isBearishBias = false;
+   }
+
+   // Stage 2: Trigger Candle Body-to-Range Quality Filter (Rejects dojis and weak candles)
+   bool isBodyQualityOk = true;
+   if(InpUseBodyQuality)
+   {
+      double candleRange = highPrice1 - lowPrice1;
+      double candleBody  = MathAbs(closePrice1 - openPrice1);
+      if(candleRange <= 0.0 || (candleBody / candleRange) < InpMinBodyRatio)
+      {
+         isBodyQualityOk = false;
+      }
+   }
+
+   // 7. High-Quality Breakout Setup Filter (Closed bar validation with Volume Expansion & Quality)
    // - Bullish: Preceding candle (1) closed cleanly ABOVE the EMA (emaLTF[1]), while candle (2) was below or touched it (emaLTF[2]).
    // - Volume: Trigger candle (1) must exhibit volume expansion above rolling average to eliminate fakeouts.
    bool isVolumeConfirmed = CheckVolumeExpansion(_Symbol, _Period, 1);
-   bool isHighQualityBuy  = isBullishBias && isVolumeConfirmed && (closePrice1 > emaLTF[1] && closePrice2 <= emaLTF[2] && closePrice1 > openPrice1);
-   bool isHighQualitySell = isBearishBias && isVolumeConfirmed && (closePrice1 < emaLTF[1] && closePrice2 >= emaLTF[2] && closePrice1 < openPrice1);
+   bool isHighQualityBuy  = isBullishBias && isVolumeConfirmed && isBodyQualityOk && (closePrice1 > emaLTF[1] && closePrice2 <= emaLTF[2] && closePrice1 > openPrice1);
+   bool isHighQualitySell = isBearishBias && isVolumeConfirmed && isBodyQualityOk && (closePrice1 < emaLTF[1] && closePrice2 >= emaLTF[2] && closePrice1 < openPrice1);
 
    // 8. Order Execution
 

@@ -1,0 +1,56 @@
+﻿; Presets/HR_UNIFIED_SILVER_RESEARCH.set
+; HR Unified Multi-Strategy Trading System - Silver (XAGUSD) Research Opt-In Preset
+; Warning: Silver showed persistent cost-adjusted losses in Phases 7-11. For demo research only.
+InpMasterTradingEnable=true
+InpPerTradeRiskPercent=0.25
+InpMaxDailyDrawdownPercent=2.0
+InpMaxPortfolioRiskPercent=2.0
+InpMaxTotalOpenPositions=2
+InpMaxPositionsPerSymbol=1
+InpConsecutiveLossLimit=2
+InpConsecutiveLossCooldownMin=120
+InpEnableSessionFilter=true
+InpUKSessionStartHour=8
+InpUKSessionStartMin=0
+InpUKSessionEndHour=22
+InpUKSessionEndMin=0
+InpBrokerGMTOffset=2
+InpBrokerDstMode=1
+InpEnableFridayClose=true
+InpFridayCloseHourUK=21
+InpFridayCloseMinUK=0
+InpEnableRolloverBlackout=true
+InpShowDashboard=true
+; Gold (XAUUSD) - Disabled
+InpXAU_EnableSymbol=false
+; Silver (XAGUSD) - Enabled for Experimental Evaluation
+InpXAG_EnableSymbol=true
+InpXAG_CustomSymbol=XAGUSD
+InpXAG_MaxSpreadPoints=50
+InpXAG_MaxSLPoints=1200
+InpXAG_Enable_9EMA=false
+InpXAG_Enable_21EMA=false
+InpXAG_Enable_50EMA=false
+InpXAG_Enable_100EMA=false
+InpXAG_Enable_LiqSweep=true
+InpXAG_Enable_TrendPullback=true
+InpXAG_Enable_VolBreakout=false
+InpXAG_Enable_StructMomentum=false
+; S&P 500 (US500) - Disabled
+InpSPX_EnableSymbol=false
+; Nasdaq 100 (USTEC) - Disabled
+InpNAS_EnableSymbol=false
+; Tuning
+InpDefaultTPRatio=3.0
+InpUseVolumeFilter=true
+InpVolumeLookback=20
+InpVolumeMultiplier=1.2
+InpUseStructuralSL=true
+InpSwingLookback=5
+InpUseATRBuffer=true
+InpATRPeriod=14
+InpATRBufferMultiplier=1.0
+InpUseBE=true
+InpBETargetRR=1.5
+InpBESafetyPoints=15.0
+InpUseTrailing=false

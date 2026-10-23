@@ -229,7 +229,7 @@ void CRiskManager::Init(const double riskPercent,
                         const int maxConsecLoss,
                         const int cooldownMin)
 {
-   m_riskPercent = (riskPercent > 0.0) ? riskPercent : 0.5;
+   m_riskPercent = (riskPercent > 0.0) ? MathMin(1.0, riskPercent) : 0.5;
    m_maxDailyDrawdownPercent = (maxDailyDD > 0.0) ? maxDailyDD : 2.0;
    m_maxPortfolioRiskPercent = (maxPortfolioRisk > 0.0) ? maxPortfolioRisk : 1.5;
    m_maxTotalPositions = (maxTotalPos > 0) ? maxTotalPos : 5;
@@ -355,9 +355,21 @@ double CRiskManager::CalculateLotSize(const string symbol, const double entryPri
       return 0.0;
    }
    
-   // Calculation: riskAmount / (ticksToSL * tickValue)
-   double slTicks = slDistance / tickSize;
-   double riskPerUnitLot = slTicks * tickValue;
+   // Prefer OrderCalcProfit() for broker-accurate monetary loss estimation across FX, CFD, and Indices
+   ENUM_ORDER_TYPE orderType = (entryPrice > stopLossPrice) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double estLoss = 0.0;
+   double riskPerUnitLot = 0.0;
+   
+   if(OrderCalcProfit(orderType, symbol, 1.0, entryPrice, stopLossPrice, estLoss) && estLoss < 0.0)
+   {
+      riskPerUnitLot = MathAbs(estLoss);
+   }
+   else
+   {
+      // Fallback: riskAmount / (ticksToSL * tickValue)
+      double slTicks = slDistance / tickSize;
+      riskPerUnitLot = slTicks * tickValue;
+   }
    
    if(riskPerUnitLot <= 0.0)
       return 0.0;
@@ -365,13 +377,29 @@ double CRiskManager::CalculateLotSize(const string symbol, const double entryPri
    double calculatedLot = riskAmount / riskPerUnitLot;
    double normalizedLot = NormalizeVolume(symbol, calculatedLot);
    
-   // Verify maximum allowable risk is not breached by lot rounding up
+   // Hard Cap Guardrail: Maximum planned risk is 1.0% of equity or m_riskPercent (whichever is lower).
+   // If minimum tradable lot size exceeds the planned risk budget, skip the trade completely rather than forcing it.
+   double maxAllowedRiskBudget = MathMin(riskAmount, equity * 0.01);
    double actualRisk = normalizedLot * riskPerUnitLot;
-   if(actualRisk > riskAmount * 1.5)
+   
+   if(actualRisk > (maxAllowedRiskBudget + 0.01) || normalizedLot <= 0.0)
    {
-      PrintFormat("[RiskManager] Rejected: Minimum tradable volume %.2f would exceed allowed risk %.2f %s",
-                  normalizedLot, riskAmount, m_accInfo.Currency());
+      PrintFormat("[RiskManager] Rejected: Lot %.2f risk (%.2f %s) exceeds risk budget (%.2f %s). Trade skipped.",
+                  normalizedLot, actualRisk, m_accInfo.Currency(), maxAllowedRiskBudget, m_accInfo.Currency());
       return 0.0;
+   }
+
+   // Validate margin requirements before order placement
+   double requiredMargin = 0.0;
+   if(OrderCalcMargin(orderType, symbol, normalizedLot, entryPrice, requiredMargin))
+   {
+      double freeMargin = m_accInfo.FreeMargin();
+      if(requiredMargin > freeMargin)
+      {
+         PrintFormat("[RiskManager] Rejected: Required margin %.2f %s exceeds free margin %.2f %s",
+                     requiredMargin, m_accInfo.Currency(), freeMargin, m_accInfo.Currency());
+         return 0.0;
+      }
    }
    
    return normalizedLot;
@@ -923,6 +951,7 @@ private:
    bool              m_useBreakEven;      // Automatic break-even activation flag
    double            m_breakEvenTriggerR; // Reward in R to trigger break-even (Default 1.0R)
    double            m_breakEvenBufferPts;// Points beyond entry to cover spread/commission
+   double            m_commissionPerLot;  // Estimated round-turn commission per lot in account currency
    bool              m_useTrailingStop;   // Dynamic trailing stop flag
    double            m_trailingStopPts;   // Trailing distance in points
    double            m_trailingStepPts;   // Trailing increment step in points
@@ -939,6 +968,7 @@ public:
                           const bool useBE = true,
                           const double beTriggerR = 1.0,
                           const double beBufferPts = 5.0,
+                          const double commPerLot = 0.0,
                           const bool useTrailing = false,
                           const double trailPts = 50.0,
                           const double trailStepPts = 10.0);
@@ -978,6 +1008,7 @@ CTradeExecutor::CTradeExecutor() :
    m_useBreakEven(true),
    m_breakEvenTriggerR(1.0),
    m_breakEvenBufferPts(5.0),
+   m_commissionPerLot(0.0),
    m_useTrailingStop(false),
    m_trailingStopPts(50.0),
    m_trailingStepPts(10.0)
@@ -992,6 +1023,7 @@ void CTradeExecutor::Init(const ulong magicNumber,
                           const bool useBE,
                           const double beTriggerR,
                           const double beBufferPts,
+                          const double commPerLot,
                           const bool useTrailing,
                           const double trailPts,
                           const double trailStepPts)
@@ -1001,6 +1033,7 @@ void CTradeExecutor::Init(const ulong magicNumber,
    m_useBreakEven       = useBE;
    m_breakEvenTriggerR  = beTriggerR;
    m_breakEvenBufferPts = beBufferPts;
+   m_commissionPerLot   = (commPerLot >= 0.0) ? commPerLot : 0.0;
    m_useTrailingStop    = useTrailing;
    m_trailingStopPts    = trailPts;
    m_trailingStepPts    = trailStepPts;
@@ -1035,6 +1068,35 @@ ulong CTradeExecutor::ExecuteBuy(const string symbol,
    {
       PrintFormat("[TradeExecutor] Rejected BUY on %s: Invalid Stop Loss %.5f (Ask: %.5f)",
                   symbol, normalizedSL, ask);
+      return 0;
+   }
+   
+   // Broker Constraints Verification (Volume, StopsLevel, FreezeLevel)
+   double minLot  = m_symInfo.LotsMin();
+   double maxLot  = m_symInfo.LotsMax();
+   double lotStep = m_symInfo.LotsStep();
+   if(volume < minLot || volume > maxLot)
+   {
+      PrintFormat("[TradeExecutor] Rejected BUY on %s: Volume %.2f outside broker bounds [%.2f, %.2f]",
+                  symbol, volume, minLot, maxLot);
+      return 0;
+   }
+   
+   double point = m_symInfo.Point();
+   long stopsLevelPoints = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevelPoints = SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double minStopDist = MathMax((double)stopsLevelPoints, (double)freezeLevelPoints) * point;
+   
+   if((ask - normalizedSL) < minStopDist)
+   {
+      PrintFormat("[TradeExecutor] Rejected BUY on %s: SL distance %.5f below minimum broker stop distance %.5f",
+                  symbol, ask - normalizedSL, minStopDist);
+      return 0;
+   }
+   if(normalizedTP > 0.0 && (normalizedTP - ask) < minStopDist)
+   {
+      PrintFormat("[TradeExecutor] Rejected BUY on %s: TP distance %.5f below minimum broker stop distance %.5f",
+                  symbol, normalizedTP - ask, minStopDist);
       return 0;
    }
    
@@ -1080,6 +1142,34 @@ ulong CTradeExecutor::ExecuteSell(const string symbol,
    {
       PrintFormat("[TradeExecutor] Rejected SELL on %s: Invalid Stop Loss %.5f (Bid: %.5f)",
                   symbol, normalizedSL, bid);
+      return 0;
+   }
+   
+   // Broker Constraints Verification (Volume, StopsLevel, FreezeLevel)
+   double minLot  = m_symInfo.LotsMin();
+   double maxLot  = m_symInfo.LotsMax();
+   if(volume < minLot || volume > maxLot)
+   {
+      PrintFormat("[TradeExecutor] Rejected SELL on %s: Volume %.2f outside broker bounds [%.2f, %.2f]",
+                  symbol, volume, minLot, maxLot);
+      return 0;
+   }
+   
+   double point = m_symInfo.Point();
+   long stopsLevelPoints = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevelPoints = SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double minStopDist = MathMax((double)stopsLevelPoints, (double)freezeLevelPoints) * point;
+   
+   if((normalizedSL - bid) < minStopDist)
+   {
+      PrintFormat("[TradeExecutor] Rejected SELL on %s: SL distance %.5f below minimum broker stop distance %.5f",
+                  symbol, normalizedSL - bid, minStopDist);
+      return 0;
+   }
+   if(normalizedTP > 0.0 && (bid - normalizedTP) < minStopDist)
+   {
+      PrintFormat("[TradeExecutor] Rejected SELL on %s: TP distance %.5f below minimum broker stop distance %.5f",
+                  symbol, bid - normalizedTP, minStopDist);
       return 0;
    }
    
@@ -1171,7 +1261,7 @@ void CTradeExecutor::ManageOpenPositions(const string symbol)
          double currentSL = m_posInfo.StopLoss();
          double currentTP = m_posInfo.TakeProfit();
          
-         // 1. Break-Even at +1R
+         // 1. Break-Even at +1R (Cost-Aware & Dynamic)
          if(m_useBreakEven && currentSL > 0.0)
          {
             double initialRiskDistance = MathAbs(openPrice - currentSL);
@@ -1179,28 +1269,68 @@ void CTradeExecutor::ManageOpenPositions(const string symbol)
             {
                double targetTriggerDistance = initialRiskDistance * m_breakEvenTriggerR;
                
+               // Dynamic Cost Calculation: Commission + Spread + Buffer
+               double tickSize = m_symInfo.TickSize();
+               double tickVal  = m_symInfo.TickValue();
+               double commPts  = 0.0;
+               if(m_commissionPerLot > 0.0 && tickVal > 0.0 && tickSize > 0.0 && point > 0.0)
+               {
+                  // Money cost per point for 1.0 lot = (tickVal / tickSize) * point
+                  double valPerPointPerLot = (tickVal / tickSize) * point;
+                  if(valPerPointPerLot > 0.0)
+                     commPts = m_commissionPerLot / valPerPointPerLot;
+               }
+               
+               double spreadPts = (ask - bid) / point;
+               double totalCostPts = commPts + spreadPts + m_breakEvenBufferPts;
+               double costOffsetPrice = totalCostPts * point;
+               
+               long stopsLevelPoints = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+               long freezeLevelPoints = SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+               double minBrokerStopDist = MathMax((double)stopsLevelPoints, (double)freezeLevelPoints) * point;
+               
                if(posType == POSITION_TYPE_BUY)
                {
-                  double buffer = m_breakEvenBufferPts * point;
-                  double beLevel = openPrice + buffer;
+                  double rawBE = openPrice + costOffsetPrice;
+                  double beLevel = NormalizeDouble(rawBE, digits);
+                  
+                  // Ensure proposed BE is below current bid by at least minBrokerStopDist
                   if(bid >= openPrice + targetTriggerDistance && currentSL < openPrice)
                   {
-                     PrintFormat("[TradeExecutor] Break-even triggered for BUY #%I64u on %s (Current SL: %.5f -> New SL: %.5f)",
-                                 ticket, symbol, currentSL, beLevel);
-                     ModifyPosition(ticket, beLevel, currentTP);
-                     currentSL = beLevel;
+                     if((bid - beLevel) >= minBrokerStopDist)
+                     {
+                        PrintFormat("[TradeExecutor] Cost-Aware BE triggered for BUY #%I64u on %s | Open: %.5f | CommPts: %.1f | SpreadPts: %.1f | BufferPts: %.1f | Target BE SL: %.5f (Bid: %.5f)",
+                                    ticket, symbol, openPrice, commPts, spreadPts, m_breakEvenBufferPts, beLevel, bid);
+                        if(ModifyPosition(ticket, beLevel, currentTP))
+                           currentSL = beLevel;
+                     }
+                     else
+                     {
+                        PrintFormat("[TradeExecutor] Cost-Aware BE deferred for BUY #%I64u on %s: Bid %.5f too close to BE SL %.5f (MinDist: %.5f)",
+                                    ticket, symbol, bid, beLevel, minBrokerStopDist);
+                     }
                   }
                }
                else if(posType == POSITION_TYPE_SELL)
                {
-                  double buffer = m_breakEvenBufferPts * point;
-                  double beLevel = openPrice - buffer;
+                  double rawBE = openPrice - costOffsetPrice;
+                  double beLevel = NormalizeDouble(rawBE, digits);
+                  
+                  // Ensure proposed BE is above current ask by at least minBrokerStopDist
                   if(ask <= openPrice - targetTriggerDistance && (currentSL > openPrice || currentSL == 0.0))
                   {
-                     PrintFormat("[TradeExecutor] Break-even triggered for SELL #%I64u on %s (Current SL: %.5f -> New SL: %.5f)",
-                                 ticket, symbol, currentSL, beLevel);
-                     ModifyPosition(ticket, beLevel, currentTP);
-                     currentSL = beLevel;
+                     if((beLevel - ask) >= minBrokerStopDist)
+                     {
+                        PrintFormat("[TradeExecutor] Cost-Aware BE triggered for SELL #%I64u on %s | Open: %.5f | CommPts: %.1f | SpreadPts: %.1f | BufferPts: %.1f | Target BE SL: %.5f (Ask: %.5f)",
+                                    ticket, symbol, openPrice, commPts, spreadPts, m_breakEvenBufferPts, beLevel, ask);
+                        if(ModifyPosition(ticket, beLevel, currentTP))
+                           currentSL = beLevel;
+                     }
+                     else
+                     {
+                        PrintFormat("[TradeExecutor] Cost-Aware BE deferred for SELL #%I64u on %s: Ask %.5f too close to BE SL %.5f (MinDist: %.5f)",
+                                    ticket, symbol, ask, beLevel, minBrokerStopDist);
+                     }
                   }
                }
             }
@@ -1290,22 +1420,146 @@ string CTradeExecutor::FormatRetcode(const uint retcode)
 
 
 //+------------------------------------------------------------------+
+//| Broker Daylight Saving Time Schedule Mode                        |
+//+------------------------------------------------------------------+
+enum ENUM_BROKER_DST_MODE
+{
+   BROKER_DST_NONE   = 0, // No DST (Fixed GMT Offset year-round)
+   BROKER_DST_US     = 1, // US Schedule (2nd Sun Mar to 1st Sun Nov: Exness, IC Markets, Pepperstone)
+   BROKER_DST_EUROPE = 2  // European Schedule (Last Sun Mar to Last Sun Oct)
+};
+
+//+------------------------------------------------------------------+
 //| Session & Market Quality Filter Class                            |
 //+------------------------------------------------------------------+
 class CMarketFilters
 {
 private:
-   bool              m_enableSessionFilter;
-   int               m_brokerGMTOffset;        // Broker GMT offset (e.g. +2 or +3)
-   bool              m_tradeAsian;
-   bool              m_tradeLondon;
-   bool              m_tradeNewYork;
-   bool              m_enableRolloverBlackout; // Avoid high-spread broker rollover (21:55 - 22:15 GMT)
-   int               m_minSignalIntervalMinutes;
+   bool                 m_enableSessionFilter;
+   bool                 m_useUKSession;
+   int                  m_ukStartHour;
+   int                  m_ukStartMin;
+   int                  m_ukEndHour;
+   int                  m_ukEndMin;
+   int                  m_brokerGMTOffset;        // Broker standard GMT offset (e.g. +2 for winter)
+   ENUM_BROKER_DST_MODE m_brokerDstMode;          // Broker DST regime
+   bool                 m_tradeAsian;
+   bool                 m_tradeLondon;
+   bool                 m_tradeNewYork;
+   bool                 m_enableRolloverBlackout; // Avoid high-spread broker rollover (21:55 - 22:15 GMT)
+   int                  m_minSignalIntervalMinutes;
    
-   CSymbolInfo       m_symInfo;
+   CSymbolInfo          m_symInfo;
 
-   int               TimeToMinutes(const int hour, const int min) const { return (hour * 60) + min; }
+   int                  TimeToMinutes(const int hour, const int min) const { return (hour * 60) + min; }
+
+   // Calculate effective broker GMT offset considering US/EU daylight saving schedules
+   int                  GetBrokerGMTOffset(const datetime serverTime) const
+   {
+      if(m_brokerDstMode == BROKER_DST_NONE)
+         return m_brokerGMTOffset;
+
+      MqlDateTime dt;
+      TimeToStruct(serverTime, dt);
+
+      if(m_brokerDstMode == BROKER_DST_US)
+      {
+         // US DST Schedule: Daylight saving begins 2nd Sunday of March, ends 1st Sunday of November
+         if(dt.mon < 3 || dt.mon > 11) return m_brokerGMTOffset;
+         if(dt.mon > 3 && dt.mon < 11) return m_brokerGMTOffset + 1;
+
+         if(dt.mon == 3)
+         {
+            // 2nd Sunday of March calculation
+            MqlDateTime temp;
+            temp.year = dt.year; temp.mon = 3; temp.day = 1; temp.hour = 0; temp.min = 0; temp.sec = 0;
+            datetime firstDayTime = StructToTime(temp);
+            TimeToStruct(firstDayTime, temp);
+            int firstSun = (temp.day_of_week == 0) ? 1 : (8 - temp.day_of_week);
+            int secondSun = firstSun + 7;
+            if(dt.day > secondSun) return m_brokerGMTOffset + 1;
+            if(dt.day == secondSun && dt.hour >= 2) return m_brokerGMTOffset + 1;
+            return m_brokerGMTOffset;
+         }
+         else // dt.mon == 11
+         {
+            // 1st Sunday of November calculation
+            MqlDateTime temp;
+            temp.year = dt.year; temp.mon = 11; temp.day = 1; temp.hour = 0; temp.min = 0; temp.sec = 0;
+            datetime firstDayTime = StructToTime(temp);
+            TimeToStruct(firstDayTime, temp);
+            int firstSun = (temp.day_of_week == 0) ? 1 : (8 - temp.day_of_week);
+            if(dt.day < firstSun) return m_brokerGMTOffset + 1;
+            if(dt.day == firstSun && dt.hour < 2) return m_brokerGMTOffset + 1;
+            return m_brokerGMTOffset;
+         }
+      }
+      else if(m_brokerDstMode == BROKER_DST_EUROPE)
+      {
+         // European DST Schedule: Last Sunday of March to Last Sunday of October
+         if(dt.mon < 3 || dt.mon > 10) return m_brokerGMTOffset;
+         if(dt.mon > 3 && dt.mon < 10) return m_brokerGMTOffset + 1;
+
+         MqlDateTime temp;
+         temp.year = dt.year; temp.mon = dt.mon; temp.day = 31; temp.hour = 1; temp.min = 0; temp.sec = 0;
+         datetime endOfMonth = StructToTime(temp);
+         TimeToStruct(endOfMonth, temp);
+         int lastSun = 31 - temp.day_of_week;
+
+         if(dt.mon == 3)
+         {
+            if(dt.day > lastSun) return m_brokerGMTOffset + 1;
+            if(dt.day == lastSun && dt.hour >= 1) return m_brokerGMTOffset + 1;
+            return m_brokerGMTOffset;
+         }
+         else
+         {
+            if(dt.day < lastSun) return m_brokerGMTOffset + 1;
+            if(dt.day == lastSun && dt.hour < 1) return m_brokerGMTOffset + 1;
+            return m_brokerGMTOffset;
+         }
+      }
+
+      return m_brokerGMTOffset;
+   }
+
+   // Calculate if a given GMT time falls within British Summer Time (BST = GMT + 1)
+   // Rule: Last Sunday of March (01:00 GMT) to Last Sunday of October (01:00 GMT)
+   bool              IsUKDaylightSaving(const datetime gmtTime) const
+   {
+      MqlDateTime dt;
+      TimeToStruct(gmtTime, dt);
+      
+      // Before March or after October -> GMT (Winter time)
+      if(dt.mon < 3 || dt.mon > 10) return false;
+      // April through September -> Always BST (Summer time)
+      if(dt.mon > 3 && dt.mon < 10) return true;
+      
+      // Calculate day of last Sunday in month
+      MqlDateTime temp;
+      temp.year = dt.year;
+      temp.mon  = dt.mon;
+      temp.day  = 31;
+      temp.hour = 1;
+      temp.min  = 0;
+      temp.sec  = 0;
+      datetime endOfMonth = StructToTime(temp);
+      TimeToStruct(endOfMonth, temp);
+      int lastSunday = 31 - temp.day_of_week;
+      
+      if(dt.mon == 3) // March transition: clocks jump at 01:00 GMT
+      {
+         if(dt.day > lastSunday) return true;
+         if(dt.day == lastSunday && dt.hour >= 1) return true;
+         return false;
+      }
+      else // October transition: clocks fall back at 01:00 GMT
+      {
+         if(dt.day < lastSunday) return true;
+         if(dt.day == lastSunday && dt.hour < 1) return true;
+         return false;
+      }
+   }
 
 public:
                      CMarketFilters();
@@ -1313,7 +1567,13 @@ public:
 
    // Setup
    void              Init(const bool enableSessionFilter = true,
-                          const int brokerGMTOffset = 0,
+                          const bool useUKSession = true,
+                          const int ukStartHour = 8,
+                          const int ukStartMin = 0,
+                          const int ukEndHour = 22,
+                          const int ukEndMin = 0,
+                          const int brokerGMTOffset = 2,
+                          const ENUM_BROKER_DST_MODE brokerDstMode = BROKER_DST_US,
                           const bool tradeAsian = false,
                           const bool tradeLondon = true,
                           const bool tradeNewYork = true,
@@ -1332,7 +1592,13 @@ public:
 //+------------------------------------------------------------------+
 CMarketFilters::CMarketFilters() :
    m_enableSessionFilter(true),
-   m_brokerGMTOffset(0),
+   m_useUKSession(true),
+   m_ukStartHour(8),
+   m_ukStartMin(0),
+   m_ukEndHour(22),
+   m_ukEndMin(0),
+   m_brokerGMTOffset(2),
+   m_brokerDstMode(BROKER_DST_US),
    m_tradeAsian(false),
    m_tradeLondon(true),
    m_tradeNewYork(true),
@@ -1345,7 +1611,13 @@ CMarketFilters::CMarketFilters() :
 //| Initialize Filter Settings                                       |
 //+------------------------------------------------------------------+
 void CMarketFilters::Init(const bool enableSessionFilter,
+                          const bool useUKSession,
+                          const int ukStartHour,
+                          const int ukStartMin,
+                          const int ukEndHour,
+                          const int ukEndMin,
                           const int brokerGMTOffset,
+                          const ENUM_BROKER_DST_MODE brokerDstMode,
                           const bool tradeAsian,
                           const bool tradeLondon,
                           const bool tradeNewYork,
@@ -1353,7 +1625,13 @@ void CMarketFilters::Init(const bool enableSessionFilter,
                           const int minSignalInterval)
 {
    m_enableSessionFilter      = enableSessionFilter;
+   m_useUKSession             = useUKSession;
+   m_ukStartHour              = ukStartHour;
+   m_ukStartMin               = ukStartMin;
+   m_ukEndHour                = ukEndHour;
+   m_ukEndMin                 = ukEndMin;
    m_brokerGMTOffset          = brokerGMTOffset;
+   m_brokerDstMode            = brokerDstMode;
    m_tradeAsian               = tradeAsian;
    m_tradeLondon              = tradeLondon;
    m_tradeNewYork             = tradeNewYork;
@@ -1369,14 +1647,15 @@ bool CMarketFilters::IsSessionAllowed(string &reason)
    if(!m_enableSessionFilter)
       return true;
 
-   datetime serverTime = TimeCurrent();
-   datetime gmtTime    = serverTime - (m_brokerGMTOffset * 3600);
+   datetime serverTime     = TimeCurrent();
+   int effectiveOffset     = GetBrokerGMTOffset(serverTime);
+   datetime gmtTime        = serverTime - (effectiveOffset * 3600);
    
-   MqlDateTime dt;
-   TimeToStruct(gmtTime, dt);
+   MqlDateTime dtGMT;
+   TimeToStruct(gmtTime, dtGMT);
    
-   // Weekend Check
-   if(dt.day_of_week == 0 || (dt.day_of_week == 5 && dt.hour >= 21) || dt.day_of_week == 6)
+   // Weekend Check (GMT based)
+   if(dtGMT.day_of_week == 0 || (dtGMT.day_of_week == 5 && dtGMT.hour >= 21) || dtGMT.day_of_week == 6)
    {
       reason = "Weekend Market Closure";
       return false;
@@ -1385,7 +1664,7 @@ bool CMarketFilters::IsSessionAllowed(string &reason)
    // Rollover Blackout Check (21:55 - 22:15 GMT)
    if(m_enableRolloverBlackout)
    {
-      int currentMin = TimeToMinutes(dt.hour, dt.min);
+      int currentMin = TimeToMinutes(dtGMT.hour, dtGMT.min);
       int rolloverStart = TimeToMinutes(21, 55);
       int rolloverEnd   = TimeToMinutes(22, 15);
       if(currentMin >= rolloverStart && currentMin <= rolloverEnd)
@@ -1395,13 +1674,35 @@ bool CMarketFilters::IsSessionAllowed(string &reason)
       }
    }
    
-   // Session Hour Ranges in GMT
+   // 1. UK Local Session Mode (Europe/London with GMT/BST adjustment)
+   if(m_useUKSession)
+   {
+      bool isBST = IsUKDaylightSaving(gmtTime);
+      datetime ukTime = gmtTime + (isBST ? 3600 : 0);
+      MqlDateTime dtUK;
+      TimeToStruct(ukTime, dtUK);
+      
+      int currentUKMin = TimeToMinutes(dtUK.hour, dtUK.min);
+      int startUKMin   = TimeToMinutes(m_ukStartHour, m_ukStartMin);
+      int endUKMin     = TimeToMinutes(m_ukEndHour, m_ukEndMin);
+      
+      if(currentUKMin < startUKMin || currentUKMin >= endUKMin)
+      {
+         reason = StringFormat("Outside UK Trading Window %02d:%02d-%02d:%02d (Current UK: %02d:%02d %s, Broker GMT+%d)",
+                               m_ukStartHour, m_ukStartMin, m_ukEndHour, m_ukEndMin,
+                               dtUK.hour, dtUK.min, isBST ? "BST" : "GMT", effectiveOffset);
+         return false;
+      }
+      return true;
+   }
+   
+   // 2. Fallback Standard Session Hour Ranges in GMT
    // Asian:    00:00 - 08:00 GMT
    // London:   07:00 - 16:00 GMT
    // New York: 13:00 - 21:30 GMT
-   bool inAsian    = (dt.hour >= 0 && dt.hour < 8);
-   bool inLondon   = (dt.hour >= 7 && dt.hour < 16);
-   bool inNewYork  = (dt.hour >= 13 && dt.hour < 21) || (dt.hour == 21 && dt.min <= 30);
+   bool inAsian    = (dtGMT.hour >= 0 && dtGMT.hour < 8);
+   bool inLondon   = (dtGMT.hour >= 7 && dtGMT.hour < 16);
+   bool inNewYork  = (dtGMT.hour >= 13 && dtGMT.hour < 21) || (dtGMT.hour == 21 && dtGMT.min <= 30);
    
    bool sessionValid = false;
    if(m_tradeAsian && inAsian)     sessionValid = true;
@@ -1410,8 +1711,8 @@ bool CMarketFilters::IsSessionAllowed(string &reason)
    
    if(!sessionValid)
    {
-      reason = StringFormat("Current GMT Time %02d:%02d outside enabled sessions (Asian:%d, London:%d, NY:%d)",
-                            dt.hour, dt.min, m_tradeAsian, m_tradeLondon, m_tradeNewYork);
+      reason = StringFormat("Current GMT Time %02d:%02d outside enabled sessions (Asian:%d, London:%d, NY:%d, Broker GMT+%d)",
+                            dtGMT.hour, dtGMT.min, m_tradeAsian, m_tradeLondon, m_tradeNewYork, effectiveOffset);
       return false;
    }
    
@@ -1423,7 +1724,9 @@ bool CMarketFilters::IsSessionAllowed(string &reason)
 //+------------------------------------------------------------------+
 bool CMarketFilters::IsRolloverActive() const
 {
-   datetime gmtTime = TimeCurrent() - (m_brokerGMTOffset * 3600);
+   datetime serverTime = TimeCurrent();
+   int effectiveOffset = GetBrokerGMTOffset(serverTime);
+   datetime gmtTime    = serverTime - (effectiveOffset * 3600);
    MqlDateTime dt;
    TimeToStruct(gmtTime, dt);
    int currentMin = (dt.hour * 60) + dt.min;
@@ -1472,17 +1775,28 @@ bool CMarketFilters::IsCooldownSatisfied(const datetime lastTradeTime) const
 
 //--- Input Groups
 input group "=== Watchlist & Multi-Symbol Scanning ==="
-input string            InpWatchlist            = "XAUUSD,XAGUSD,US500,US100,USOIL,EURUSD,GBPUSD,USDJPY"; // Multi-Symbol List (CSV)
+input string            InpWatchlist            = "XAUUSD";               // Monitored Symbol(s) CSV (Default: XAUUSD for Controlled Testing)
 input int               InpMaxSpreadPoints      = 50;                     // Maximum Permitted Spread (Points)
 input int               InpScanTimerSeconds     = 5;                      // Scanner Polling Interval (Seconds)
 
 input group "=== Liquidity Sweep Strategy Parameters ==="
 input ENUM_TIMEFRAMES   InpExecutionTF          = PERIOD_M15;             // Execution Timeframe
 input int               InpSwingLookbackBars    = 24;                     // Swing High/Low Lookback Window (Bars)
-input double            InpMinSweepPoints       = 15.0;                   // Minimum Sweep Penetration (Points)
-input double            InpMaxSweepPoints       = 350.0;                  // Maximum Sweep Penetration (Points)
-input double            InpMinDisplacementR     = 0.5;                    // Minimum Reversal Candle Body Ratio
+input bool              InpExcludeImmediatePriorBar = true;               // Exclude Immediately Prior Bar (Require Swing Level >= 2 Bars Old)
+input bool              InpUseATRSweepFilter    = true;                   // Use Dynamic ATR Sweep Penetration
+input int               InpATRPeriod            = 14;                     // ATR Period for Sweep Depth & Stop Buffer
+input double            InpMinSweepATR          = 0.10;                   // Minimum Sweep Depth (ATR Multiple, e.g. 0.10 ATR)
+input double            InpMaxSweepATR          = 1.50;                   // Maximum Sweep Depth (ATR Multiple, e.g. 1.50 ATR)
+input double            InpMinSweepPoints       = 20.0;                   // Fallback Minimum Sweep (Points, if ATR disabled)
+input double            InpMaxSweepPoints       = 500.0;                  // Fallback Maximum Sweep (Points, if ATR disabled)
+input double            InpMinDisplacementR     = 0.50;                   // Minimum Reversal Candle Body Ratio (Upper/Lower half)
+input bool              InpRequireReversalCandle= true;                   // Require Candle Color to Match Reversal (Buy: Close > Open, Sell: Close < Open)
 input double            InpRewardToRiskRatio    = 2.5;                    // Target Reward-to-Risk Ratio (1:2.5)
+
+input group "=== Stop Loss & Buffer Parameters ==="
+input bool              InpUseATRBuffer         = true;                   // Use Dynamic ATR Stop Buffer
+input double            InpStopBufferATRRatio   = 0.20;                   // Stop Buffer ATR Multiple (e.g. 0.20 ATR)
+input double            InpStopBufferPoints     = 50.0;                   // Fallback / Fixed Stop Buffer (Points, e.g. 50 pts = $0.50 on Gold)
 
 input group "=== Risk Management ==="
 input double            InpRiskPercent          = 0.5;                    // Risk Percentage per Trade (Default 0.5%)
@@ -1497,16 +1811,24 @@ input ulong             InpSlippagePoints       = 10;                     // Max
 input bool              InpEnableBreakEven      = true;                   // Enable Break-Even at +1R
 input double            InpBreakEvenTriggerR    = 1.0;                    // Break-Even Trigger (R)
 input double            InpBreakEvenBufferPts   = 5.0;                    // Break-Even Buffer (Points)
+input double            InpCommissionPerLot     = 7.0;                    // Round-Turn Commission Per Lot (Deposit Currency, e.g. 7.0 for $7/lot)
 input bool              InpEnableTrailing       = false;                  // Enable Trailing Stop
 input double            InpTrailingStopPts      = 60.0;                   // Trailing Distance (Points)
 
 input group "=== Market Filters & Session Timing ==="
-input bool              InpEnableSessionFilter  = true;                   // Enable Session Filter
-input int               InpBrokerGMTOffset      = 0;                      // Broker GMT Offset
-input bool              InpTradeLondon          = true;                   // Trade London Session
-input bool              InpTradeNewYork         = true;                   // Trade New York Session
-input bool              InpTradeAsian           = false;                  // Trade Asian Session
-input bool              InpRolloverBlackout     = true;                   // Enable Rollover Blackout (21:55-22:15 GMT)
+input bool                 InpEnableSessionFilter  = true;                   // Enable Session Filter
+input bool                 InpUseUKSession         = true;                   // Use UK Local Session (London Europe/London with BST/GMT)
+input int                  InpUKStartHour          = 8;                      // UK Session Start Hour (08:00)
+input int                  InpUKStartMin           = 0;                      // UK Session Start Minute
+input int                  InpUKEndHour            = 22;                     // UK Session End Hour (22:00)
+input int                  InpUKEndMin             = 0;                      // UK Session End Minute
+input int                  InpBrokerGMTOffset      = 2;                      // Broker Standard GMT Offset (Winter/Standard: +2 for Exness)
+input ENUM_BROKER_DST_MODE InpBrokerDstMode        = BROKER_DST_US;          // Broker DST Schedule (US: 2nd Sun Mar - 1st Sun Nov)
+input bool                 InpTradeLondon          = true;                   // Trade London Session (if UK filter disabled)
+input bool                 InpTradeNewYork         = true;                   // Trade New York Session (if UK filter disabled)
+input bool                 InpTradeAsian           = false;                  // Trade Asian Session (if UK filter disabled)
+input bool                 InpRolloverBlackout     = true;                   // Enable Rollover Blackout (21:55-22:15 GMT)
+input int                  InpMinSignalIntervalMin = 30;                     // Minimum Minutes Between Consecutive Signals on Same Symbol
 
 //--- Module Instances
 CRiskManager      ExtRisk;
@@ -1516,6 +1838,21 @@ CMarketFilters    ExtFilter;
 CLogger           ExtLog;
 
 datetime          ExtLastBarTimes[];
+datetime          ExtLastTradeTimes[];
+int               ExtATRHandles[];
+
+//+------------------------------------------------------------------+
+//| Get Cached ATR for Symbol Index                                  |
+//+------------------------------------------------------------------+
+double GetSymbolATR(const int symIndex)
+{
+   if(symIndex < 0 || symIndex >= ArraySize(ExtATRHandles)) return 0.0;
+   if(ExtATRHandles[symIndex] == INVALID_HANDLE) return 0.0;
+   double buf[1];
+   if(CopyBuffer(ExtATRHandles[symIndex], 0, 1, 1, buf) > 0)
+      return buf[0];
+   return 0.0;
+}
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -1532,6 +1869,8 @@ int OnInit()
       return INIT_FAILED;
    }
    
+   int symCount = ExtScanner.GetSymbolCount();
+   
    // 2. Initialize Risk Manager
    ExtRisk.Init(InpRiskPercent, InpMaxDailyDrawdown, InpMaxPortfolioRisk, 
                 InpMaxTotalPositions, InpMaxPositionsPerSymbol, 3, 60);
@@ -1539,22 +1878,38 @@ int OnInit()
                 
    // 3. Initialize Trade Executor
    ExtTrade.Init(InpMagicNumber, InpSlippagePoints, InpEnableBreakEven, 
-                 InpBreakEvenTriggerR, InpBreakEvenBufferPts, 
+                 InpBreakEvenTriggerR, InpBreakEvenBufferPts, InpCommissionPerLot,
                  InpEnableTrailing, InpTrailingStopPts, 10.0);
                  
-   // 4. Initialize Market Filters
-   ExtFilter.Init(InpEnableSessionFilter, InpBrokerGMTOffset, InpTradeAsian, 
-                  InpTradeLondon, InpTradeNewYork, InpRolloverBlackout, 30);
+   // 4. Initialize Market Filters (UK 08:00 - 22:00 Local Session)
+   ExtFilter.Init(InpEnableSessionFilter, InpUseUKSession, InpUKStartHour, InpUKStartMin,
+                  InpUKEndHour, InpUKEndMin, InpBrokerGMTOffset, InpBrokerDstMode,
+                  InpTradeAsian, InpTradeLondon, InpTradeNewYork, InpRolloverBlackout, InpMinSignalIntervalMin);
                   
-   // Track Bar Times for closed-bar execution
-   ArrayResize(ExtLastBarTimes, ExtScanner.GetSymbolCount());
+   // Track Bar Times and Signal Cooldowns per symbol
+   ArrayResize(ExtLastBarTimes, symCount);
    ArrayInitialize(ExtLastBarTimes, 0);
+   
+   ArrayResize(ExtLastTradeTimes, symCount);
+   ArrayInitialize(ExtLastTradeTimes, 0);
+
+   // Pre-allocate ATR handles for monitored symbols
+   ArrayResize(ExtATRHandles, symCount);
+   for(int i = 0; i < symCount; i++)
+   {
+      string sym = ExtScanner.GetSymbol(i);
+      ExtATRHandles[i] = iATR(sym, InpExecutionTF, InpATRPeriod);
+      if(ExtATRHandles[i] == INVALID_HANDLE)
+      {
+         ExtLog.Warn(StringFormat("Failed to allocate ATR handle for %s on %s", sym, EnumToString(InpExecutionTF)));
+      }
+   }
 
    // Setup Timer for asynchronous multi-symbol radar
    EventSetTimer(InpScanTimerSeconds);
    
-   ExtLog.Info(StringFormat("Initialization complete. Monitoring %d instruments on %s timeframe.",
-               ExtScanner.GetSymbolCount(), EnumToString(InpExecutionTF)));
+   ExtLog.Info(StringFormat("Initialization complete. Monitoring %d instruments on %s timeframe (Broker GMT+%d with DST).",
+               symCount, EnumToString(InpExecutionTF), InpBrokerGMTOffset));
    return INIT_SUCCEEDED;
 }
 
@@ -1564,6 +1919,17 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   
+   // Release all allocated indicator handles cleanly
+   for(int i = 0; i < ArraySize(ExtATRHandles); i++)
+   {
+      if(ExtATRHandles[i] != INVALID_HANDLE)
+      {
+         IndicatorRelease(ExtATRHandles[i]);
+         ExtATRHandles[i] = INVALID_HANDLE;
+      }
+   }
+   
    ExtLog.Info(StringFormat("EA Deinitialized. Reason code: %d", reason));
 }
 
@@ -1572,24 +1938,28 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-   // Check Session Gate
+   // Maintain Daily Baseline
+   ExtRisk.CheckDailyReset();
+   
+   int totalSymbols = ExtScanner.GetSymbolCount();
+   
+   // 1. ALWAYS Manage Open Positions (Break-even, Trailing Stop, Protection) across all symbols
+   // Position protection must never be inhibited by session gates or market hours
+   for(int i = 0; i < totalSymbols; i++)
+   {
+      string sym = ExtScanner.GetSymbol(i);
+      ExtTrade.ManageOpenPositions(sym);
+   }
+   
+   // 2. Check Session Gate for NEW Entries
    string sessionReject = "";
    if(!ExtFilter.IsSessionAllowed(sessionReject))
       return;
       
-   // Maintain Daily Baseline
-   ExtRisk.CheckDailyReset();
-   
-   // Scan All Configured Instruments
-   int totalSymbols = ExtScanner.GetSymbolCount();
+   // 3. Scan and Evaluate New Setups on Bar Close during active session
    for(int i = 0; i < totalSymbols; i++)
    {
       string sym = ExtScanner.GetSymbol(i);
-      
-      // Active Trade Management (Break-even, Trailing Stop)
-      ExtTrade.ManageOpenPositions(sym);
-      
-      // Evaluate New Setup on Bar Close
       ProcessSymbolSweepStrategy(i, sym);
    }
 }
@@ -1608,11 +1978,18 @@ void OnTick()
 //+------------------------------------------------------------------+
 void ProcessSymbolSweepStrategy(const int symIndex, const string sym)
 {
-   // Check if a new bar has closed
+   // Check if a new execution bar has closed
    datetime currentBarTime = (datetime)SeriesInfoInteger(sym, InpExecutionTF, SERIES_LASTBAR_DATE);
    if(currentBarTime == 0 || currentBarTime == ExtLastBarTimes[symIndex])
       return;
       
+   // Lock bar timestamp IMMEDIATELY to prevent mid-bar retry leaks
+   ExtLastBarTimes[symIndex] = currentBarTime;
+
+   // Prevent consecutive entries within signal cooldown window
+   if(!ExtFilter.IsCooldownSatisfied(ExtLastTradeTimes[symIndex]))
+      return;
+
    // Pre-Trade Risk Check
    string riskReject = "";
    if(!ExtRisk.CanOpenNewTrade(sym, riskReject))
@@ -1629,14 +2006,15 @@ void ProcessSymbolSweepStrategy(const int symIndex, const string sym)
    int copied = CopyRates(sym, InpExecutionTF, 1, InpSwingLookbackBars + 2, rates);
    if(copied < InpSwingLookbackBars + 2)
       return;
-      
-   ExtLastBarTimes[symIndex] = currentBarTime;
 
-   // 1. Identify Prominent Swing High and Low from prior window (excluding most recent closed bar)
-   double swingHigh = rates[1].high;
-   double swingLow  = rates[1].low;
+   // 1. Identify Prominent Swing High and Low from prior window
+   // If InpExcludeImmediatePriorBar is true, start at rates[2] (Chart Bar 3) so that
+   // the swept level was established >= 2 bars ago, preventing 1-bar wick noise.
+   int startBar = InpExcludeImmediatePriorBar ? 2 : 1;
+   double swingHigh = rates[startBar].high;
+   double swingLow  = rates[startBar].low;
    
-   for(int b = 2; b <= InpSwingLookbackBars; b++)
+   for(int b = startBar + 1; b <= InpSwingLookbackBars; b++)
    {
       if(rates[b].high > swingHigh) swingHigh = rates[b].high;
       if(rates[b].low < swingLow)   swingLow  = rates[b].low;
@@ -1645,38 +2023,81 @@ void ProcessSymbolSweepStrategy(const int symIndex, const string sym)
    double point = SymbolInfoDouble(sym, SYMBOL_POINT);
    if(point <= 0.0) return;
    
+   long stopsLevelPoints = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevelPoints = SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL);
+   double minBrokerStopDist = MathMax((double)stopsLevelPoints, (double)freezeLevelPoints) * point;
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   
    MqlRates triggerBar = rates[0]; // Most recently completed bar
    double barRange = triggerBar.high - triggerBar.low;
    if(barRange <= 0.0) return;
+
+   // Dynamic Stop Buffer & Sweep Penetration Thresholds
+   double atrVal = GetSymbolATR(symIndex);
+   double bufferDist = 0.0;
+   if(InpUseATRBuffer && atrVal > 0.0)
+      bufferDist = atrVal * InpStopBufferATRRatio;
+   else
+      bufferDist = InpStopBufferPoints * point;
+      
+   if(bufferDist < point) bufferDist = point;
+
+   double minSweepDist = 0.0;
+   double maxSweepDist = 0.0;
+   if(InpUseATRSweepFilter && atrVal > 0.0)
+   {
+      minSweepDist = atrVal * InpMinSweepATR;
+      maxSweepDist = atrVal * InpMaxSweepATR;
+   }
+   else
+   {
+      minSweepDist = InpMinSweepPoints * point;
+      maxSweepDist = InpMaxSweepPoints * point;
+   }
 
    // 2. BULLISH LIQUIDITY SWEEP & RECLAIM
    // Condition: Bar pierced below swingLow, but closed firmly back ABOVE swingLow
    if(triggerBar.low < swingLow && triggerBar.close > swingLow)
    {
-      double sweepDepthPts = (swingLow - triggerBar.low) / point;
-      if(sweepDepthPts >= InpMinSweepPoints && sweepDepthPts <= InpMaxSweepPoints)
+      // Optional Reversal Candle Confirmation (Close > Open)
+      if(!InpRequireReversalCandle || triggerBar.close > triggerBar.open)
       {
-         // Verify Reversal Displacement: Close in upper 50% of bar range
-         double bodyReversal = (triggerBar.close - triggerBar.low) / barRange;
-         if(bodyReversal >= InpMinDisplacementR)
+         double sweepDepth = swingLow - triggerBar.low;
+         if(sweepDepth >= minSweepDist && sweepDepth <= maxSweepDist)
          {
-            double entryPrice = SymbolInfoDouble(sym, SYMBOL_ASK);
-            double slPrice = triggerBar.low - (5.0 * point); // Protective SL below sweep wick
-            double slDistance = entryPrice - slPrice;
-            
-            if(slDistance > 0.0)
+            // Verify Reversal Displacement: Close in upper half of bar range
+            double bodyReversal = (triggerBar.close - triggerBar.low) / barRange;
+            if(bodyReversal >= InpMinDisplacementR)
             {
-               double tpPrice = entryPrice + (slDistance * InpRewardToRiskRatio);
-               double volume = ExtRisk.CalculateLotSize(sym, entryPrice, slPrice);
+               double entryPrice = SymbolInfoDouble(sym, SYMBOL_ASK);
+               double proposedSL = triggerBar.low - bufferDist;
                
-               if(volume > 0.0)
+               // Validate against minimum broker stop distance without widening structural stop
+               if((entryPrice - proposedSL) < minBrokerStopDist)
                {
-                  string comment = "SweepReversal_Buy";
-                  ulong ticket = ExtTrade.ExecuteBuy(sym, volume, slPrice, tpPrice, comment);
-                  if(ticket > 0)
+                  PrintFormat("[LiquiditySweep] BUY on %s rejected: Structural SL distance %.5f below broker minimum stop distance %.5f",
+                              sym, entryPrice - proposedSL, minBrokerStopDist);
+                  return;
+               }
+                  
+               double slPrice = NormalizeDouble(proposedSL, digits);
+               double slDistance = entryPrice - slPrice;
+               
+               if(slDistance > 0.0 && slPrice < entryPrice)
+               {
+                  double tpPrice = NormalizeDouble(entryPrice + (slDistance * InpRewardToRiskRatio), digits);
+                  double volume = ExtRisk.CalculateLotSize(sym, entryPrice, slPrice);
+                  
+                  if(volume > 0.0)
                   {
-                     ExtLog.Signal(sym, "BUY", entryPrice, slPrice, tpPrice, 
-                                   StringFormat("Bullish sweep of %.5f (Depth: %.1f pts)", swingLow, sweepDepthPts));
+                     string comment = "SweepReversal_Buy";
+                     ulong ticket = ExtTrade.ExecuteBuy(sym, volume, slPrice, tpPrice, comment);
+                     if(ticket > 0)
+                     {
+                        ExtLastTradeTimes[symIndex] = TimeCurrent();
+                        ExtLog.Signal(sym, "BUY", entryPrice, slPrice, tpPrice, 
+                                      StringFormat("Bullish sweep of %.5f (Depth: %.2f, Buffer: %.2f)", swingLow, sweepDepth, bufferDist));
+                     }
                   }
                }
             }
@@ -1688,30 +2109,45 @@ void ProcessSymbolSweepStrategy(const int symIndex, const string sym)
    // Condition: Bar pierced above swingHigh, but closed firmly back BELOW swingHigh
    if(triggerBar.high > swingHigh && triggerBar.close < swingHigh)
    {
-      double sweepDepthPts = (triggerBar.high - swingHigh) / point;
-      if(sweepDepthPts >= InpMinSweepPoints && sweepDepthPts <= InpMaxSweepPoints)
+      // Optional Reversal Candle Confirmation (Close < Open)
+      if(!InpRequireReversalCandle || triggerBar.close < triggerBar.open)
       {
-         // Verify Reversal Displacement: Close in lower 50% of bar range
-         double bodyReversal = (triggerBar.high - triggerBar.close) / barRange;
-         if(bodyReversal >= InpMinDisplacementR)
+         double sweepDepth = triggerBar.high - swingHigh;
+         if(sweepDepth >= minSweepDist && sweepDepth <= maxSweepDist)
          {
-            double entryPrice = SymbolInfoDouble(sym, SYMBOL_BID);
-            double slPrice = triggerBar.high + (5.0 * point); // Protective SL above sweep wick
-            double slDistance = slPrice - entryPrice;
-            
-            if(slDistance > 0.0)
+            // Verify Reversal Displacement: Close in lower half of bar range
+            double bodyReversal = (triggerBar.high - triggerBar.close) / barRange;
+            if(bodyReversal >= InpMinDisplacementR)
             {
-               double tpPrice = entryPrice - (slDistance * InpRewardToRiskRatio);
-               double volume = ExtRisk.CalculateLotSize(sym, entryPrice, slPrice);
+               double entryPrice = SymbolInfoDouble(sym, SYMBOL_BID);
+               double proposedSL = triggerBar.high + bufferDist;
                
-               if(volume > 0.0)
+               // Validate against minimum broker stop distance without widening structural stop
+               if((proposedSL - entryPrice) < minBrokerStopDist)
                {
-                  string comment = "SweepReversal_Sell";
-                  ulong ticket = ExtTrade.ExecuteSell(sym, volume, slPrice, tpPrice, comment);
-                  if(ticket > 0)
+                  PrintFormat("[LiquiditySweep] SELL on %s rejected: Structural SL distance %.5f below broker minimum stop distance %.5f",
+                              sym, proposedSL - entryPrice, minBrokerStopDist);
+                  return;
+               }
+                  
+               double slPrice = NormalizeDouble(proposedSL, digits);
+               double slDistance = slPrice - entryPrice;
+               
+               if(slDistance > 0.0 && slPrice > entryPrice)
+               {
+                  double tpPrice = NormalizeDouble(entryPrice - (slDistance * InpRewardToRiskRatio), digits);
+                  double volume = ExtRisk.CalculateLotSize(sym, entryPrice, slPrice);
+                  
+                  if(volume > 0.0)
                   {
-                     ExtLog.Signal(sym, "SELL", entryPrice, slPrice, tpPrice, 
-                                   StringFormat("Bearish sweep of %.5f (Depth: %.1f pts)", swingHigh, sweepDepthPts));
+                     string comment = "SweepReversal_Sell";
+                     ulong ticket = ExtTrade.ExecuteSell(sym, volume, slPrice, tpPrice, comment);
+                     if(ticket > 0)
+                     {
+                        ExtLastTradeTimes[symIndex] = TimeCurrent();
+                        ExtLog.Signal(sym, "SELL", entryPrice, slPrice, tpPrice, 
+                                      StringFormat("Bearish sweep of %.5f (Depth: %.2f, Buffer: %.2f)", swingHigh, sweepDepth, bufferDist));
+                     }
                   }
                }
             }
