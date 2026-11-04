@@ -24,6 +24,11 @@ enum ENUM_TRADE_MANAGEMENT_MODE {
    MODE_TREND_RUNNER_CROSSOVER = 1    // Trend Runner Mode: 100% full position, BE at +1R, hold until opposite cross
 };
 
+enum ENUM_BE_CONFIRMATION_MODE {
+   BE_CONFIRM_INTRABAR_TICK    = 0,   // Intrabar Tick Confirmation (Rapid R trigger)
+   BE_CONFIRM_CLOSED_M5_BAR    = 1    // Closed M5 Bar Confirmation (Anti-Wick Noise Gate)
+};
+
 input group "=== Operation & Execution Mode ==="
 input bool                       InpAutoTradingEnabled        = true;      // Enable Live Auto Trading (False = Alerts Only)
 input ENUM_TRADE_MANAGEMENT_MODE InpTradeManagementMode       = MODE_TREND_RUNNER_CROSSOVER; // Active Trade Management Mode
@@ -50,13 +55,15 @@ input int      Volume_Lookback              = 20;        // Volume Moving Averag
 input double   Volume_Min_Multiplier        = 1.00;      // Minimum Volume Multiplier (x SMA, Default: 1.00)
 #define InpRequireEngulfing Require_Engulfing
 
-input group "=== Trade Management ==="
-input bool     Use_BreakEven                = true;      // Move SL to Break-Even at +1R
-input double   BreakEven_R                  = 1.0;       // Break-Even Activation (R-Multiple)
-input double   BreakEven_Offset             = 1.0;       // Break-Even SL Offset (Pips above/below Entry)
+input group "=== Active R-Multiple Trade Management & BE Protection ==="
+input bool                      Use_BreakEven                = true;      // Enable Break-Even Protection
+input double                    BreakEven_R                  = 1.0;       // Break-Even Activation Threshold (1.0R, 1.2R, 1.5R)
+input ENUM_BE_CONFIRMATION_MODE InpBEConfirmationMode        = BE_CONFIRM_CLOSED_M5_BAR; // BE Trigger Mode (Bar Close vs Intrabar)
+input double                    InpBESpreadMultiplier        = 1.5;       // Dynamic Spread Multiplier for BE Offset
+input double                    InpBERiskDistancePct         = 0.05;      // Risk Distance Buffer Percentage for BE Offset (5%)
+input bool                      InpEnforceMinRiskFloors      = true;      // Enforce Minimum SL Volatility Floors
 #define InpEnableBreakEvenAt1R Use_BreakEven
 #define InpBreakEvenRR         BreakEven_R
-#define InpBEOffsetPips        BreakEven_Offset
 
 input group "=== Telegram Mobile Alerts & Reports ==="
 input bool     Telegram_Mobile_Mode         = true;      // Enable Mobile-First Compact Alert Format
@@ -877,16 +884,29 @@ bool IsUKDaylightSavingTime(datetime utcTime) {
    return false;
 }
 
-datetime GetUKTime(datetime serverTime = 0) {
-   datetime utc = 0;
-   if(serverTime > 0) {
-      utc = serverTime - (InpBrokerUTCOffset * 3600);
-   } else {
-      utc = TimeGMT();
-      if(utc <= 0) {
-         utc = TimeCurrent() - (InpBrokerUTCOffset * 3600);
-      }
+int GetDynamicBrokerUTCOffset() {
+   datetime gmt = TimeGMT();
+   if(gmt > 0) {
+      datetime srv = TimeCurrent();
+      int diff = (int)MathRound((double)(srv - gmt) / 3600.0);
+      return diff;
    }
+   return InpBrokerUTCOffset;
+}
+
+datetime GetUKTime(datetime serverTime = 0) {
+   datetime srv = (serverTime > 0) ? serverTime : TimeCurrent();
+   datetime gmt = TimeGMT();
+   datetime utc = 0;
+
+   // If TimeGMT is valid and reasonable, use it directly as true UTC
+   if(gmt > 0 && MathAbs(srv - gmt) < 86400) {
+      utc = gmt;
+   } else {
+      int offset = GetDynamicBrokerUTCOffset();
+      utc = srv - (offset * 3600);
+   }
+
    int ukOffset = IsUKDaylightSavingTime(utc) ? 1 : 0; // BST (+1) or GMT (+0)
    return utc + (ukOffset * 3600);
 }
@@ -949,6 +969,60 @@ bool IsMarketClosed(string symbol) {
 }
 
 //====================================================================
+//+------------------------------------------------------------------+
+//| Minimum Risk Distance (Stop Loss Floor) Protection Engine        |
+//+------------------------------------------------------------------+
+double GetMinRiskDistanceFloor(const string sym) {
+   if(!InpEnforceMinRiskFloors) return 0.0;
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   if(point <= 0) return 0.0;
+   string s = sym;
+   StringToUpper(s);
+
+   // Instrument specific calibrated risk distance floors
+   if(StringFind(s, "XAU") >= 0 || StringFind(s, "GOLD") >= 0) {
+      return 250.0 * point; // $2.50 minimum risk floor for Gold
+   }
+   if(StringFind(s, "XAG") >= 0 || StringFind(s, "SILVER") >= 0) {
+      return 80.0 * point;  // $0.08 minimum risk floor for Silver
+   }
+   if(StringFind(s, "500") >= 0 || StringFind(s, "SPX") >= 0) {
+      return 350.0 * point; // 3.5 index points minimum risk floor for S&P 500
+   }
+   if(StringFind(s, "100") >= 0 || StringFind(s, "TEC") >= 0 || StringFind(s, "NAS") >= 0) {
+      return 2500.0 * point;// 25.0 index points minimum risk floor for Nasdaq 100
+   }
+   // Forex pairs (15 pips floor = 150 points for 5-digit broker)
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   if(digits == 3 || digits == 5) {
+      return 150.0 * point;
+   }
+   return 15.0 * point;
+}
+
+//+------------------------------------------------------------------+
+//| Dynamic Spread-Aware Break-Even Offset Calculator                |
+//+------------------------------------------------------------------+
+double CalculateDynamicBEOffset(const string sym, const double initialRiskDist) {
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   if(point <= 0) return 0.0;
+   int spreadPts = (int)SymbolInfoInteger(sym, SYMBOL_SPREAD);
+   if(spreadPts < 1) spreadPts = 1;
+
+   double spreadOffset = spreadPts * point * InpBESpreadMultiplier;
+   double riskOffset   = initialRiskDist * InpBERiskDistancePct;
+
+   // Offset must cover spread plus safety margin, never sub-spread
+   double offset = MathMax(spreadOffset, riskOffset);
+
+   // Ensure broker stop-level / freeze-level compliance
+   long stopLevel = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
+   if(stopLevel > 0 && offset < stopLevel * point) {
+      offset = (stopLevel + 2) * point;
+   }
+   return offset;
+}
+
 // SECTION 6: EVENT TIMER & TICK-LESS ENGINE
 //====================================================================
 
@@ -1926,6 +2000,11 @@ void ProcessEMAPullbackForCycle(int idx, ENUM_TIMEFRAMES tf, SymbolCycleState &c
          }
       }
 
+      double minFloor = GetMinRiskDistanceFloor(sym);
+      if((close[0] - slPrice) < minFloor) {
+         slPrice = close[0] - minFloor;
+      }
+
       double risk = close[0] - slPrice;
       if(risk <= 0) return;
       double tp1 = close[0] + (risk * 2.0);
@@ -2085,6 +2164,11 @@ void ProcessEMAPullbackForCycle(int idx, ENUM_TIMEFRAMES tf, SymbolCycleState &c
          if(high[b] > high[0] && high[b] < high[0] + (atr[0] * 1.5)) {
             slPrice = MathMax(slPrice, high[b] + (InpSLEngulfingBufferPoints * pointVal));
          }
+      }
+
+      double minFloor = GetMinRiskDistanceFloor(sym);
+      if((slPrice - close[0]) < minFloor) {
+         slPrice = close[0] + minFloor;
       }
 
       double risk = slPrice - close[0];
@@ -2428,22 +2512,48 @@ void ManageActiveTrades(datetime currentTime) {
       m_activeTrades[i].currentRR = currentR;
       if(currentR > m_activeTrades[i].maxRR) m_activeTrades[i].maxRR = currentR;
 
-      // Check +1R Break-Even
-      if(Use_BreakEven && !m_activeTrades[i].reachedBE && currentR >= BreakEven_R) {
-         double point = SymbolInfoDouble(sym, SYMBOL_POINT);
-         double beOffset = MathMin(m_activeTrades[i].initialRiskDist * 0.05, BreakEven_Offset * point * (digits == 3 || digits == 5 ? 10 : 1));
-         if(beOffset <= 0) beOffset = point * (digits == 3 || digits == 5 ? 10 : 1);
-         double bePrice = isBuy ? (m_activeTrades[i].entry + beOffset) : (m_activeTrades[i].entry - beOffset);
-         bePrice = NormalizeDouble(bePrice, digits);
+      // Check Dynamic R-Based Break-Even Protection
+      if(Use_BreakEven && !m_activeTrades[i].reachedBE) {
+         bool qualifyBE = false;
+         if(InpBEConfirmationMode == BE_CONFIRM_CLOSED_M5_BAR) {
+            // Require confirmed closed M5 bar holding at or above BreakEven_R
+            MqlRates lastRates[];
+            ArraySetAsSeries(lastRates, true);
+            if(CopyRates(sym, PERIOD_M5, 1, 1, lastRates) > 0) {
+               double barCloseR = isBuy ? (lastRates[0].close - m_activeTrades[i].entry) / riskDist
+                                        : (m_activeTrades[i].entry - lastRates[0].close) / riskDist;
+               if(barCloseR >= BreakEven_R && currentR >= BreakEven_R) {
+                  qualifyBE = true;
+               }
+            }
+         } else {
+            // Intrabar tick mode
+            if(currentR >= BreakEven_R) {
+               qualifyBE = true;
+            }
+         }
 
-         if(m_trade.PositionModify(ticket, bePrice, PositionGetDouble(POSITION_TP))) {
-            m_activeTrades[i].reachedBE = true;
-            m_activeTrades[i].sl = bePrice;
-            m_activeTrades[i].lastAlertedMilestoneR = 1;
-            m_isStateChanged = true;
+         if(qualifyBE) {
+            double beOffset = CalculateDynamicBEOffset(sym, m_activeTrades[i].initialRiskDist);
+            double bePrice  = isBuy ? (m_activeTrades[i].entry + beOffset) : (m_activeTrades[i].entry - beOffset);
+            bePrice = NormalizeDouble(bePrice, digits);
 
-            SendTrendRunnerMilestoneAlert(m_activeTrades[i], 1, true);
-            if(InpDrawChartObjects) UpdateChartSLObject(m_activeTrades[i]);
+            // Verify modification actually improves SL without violating broker rules
+            double curSL = PositionGetDouble(POSITION_SL);
+            bool isValidImprovement = isBuy ? (curSL < bePrice - (SymbolInfoDouble(sym, SYMBOL_POINT) * 0.5))
+                                            : (curSL > bePrice + (SymbolInfoDouble(sym, SYMBOL_POINT) * 0.5) || curSL == 0.0);
+
+            if(isValidImprovement && m_trade.PositionModify(ticket, bePrice, PositionGetDouble(POSITION_TP))) {
+               m_activeTrades[i].reachedBE = true;
+               m_activeTrades[i].sl = bePrice;
+               m_activeTrades[i].lastAlertedMilestoneR = (int)MathFloor(BreakEven_R);
+               m_isStateChanged = true;
+
+               SendTrendRunnerMilestoneAlert(m_activeTrades[i], (int)MathFloor(BreakEven_R), true);
+               if(InpDrawChartObjects) UpdateChartSLObject(m_activeTrades[i]);
+               PrintFormat("[921 SCANNER] Genuine Break-Even Applied on Ticket #%I64u (%s) @ %.5f (InitialRisk: %.5f, Offset: %.5f)",
+                           ticket, sym, bePrice, m_activeTrades[i].initialRiskDist, beOffset);
+            }
          }
       }
 
@@ -3188,19 +3298,27 @@ void SendTrendRunnerMilestoneAlert(const RealPositionMeta &vt, int milestoneR, b
    bool isBuy = (vt.type == ORDER_TYPE_BUY);
    double nowPrice = isBuy ? SymbolInfoDouble(vt.symbol, SYMBOL_BID) : SymbolInfoDouble(vt.symbol, SYMBOL_ASK);
 
+   datetime ukNow = GetUKTime(TimeCurrent());
+   MqlDateTime dtUK; TimeToStruct(ukNow, dtUK);
+   string timeNotice = StringFormat("%02d:%02d UK", dtUK.hour, dtUK.min);
+
    string msg = "";
    if(isBE) {
       msg = StringFormat(
-         "🎯 <b>+1R — %s</b>\n\n"
+         "🎯 <b>+%.1fR — %s</b>\n\n"
          "Entry: <code>%s</code>\n"
          "Now: <code>%s</code>\n"
-         "R: +1.00R\n\n"
+         "R: +%.2fR\n\n"
          "🔒 SL → <code>%s</code>\n"
-         "Status: <b>RISK-FREE</b>",
+         "Time: %s\n"
+         "Status: <b>RISK-FREE (Spread-Protected)</b>",
+         BreakEven_R,
          vt.symbol,
          DoubleToString(vt.entry, digits),
          DoubleToString(nowPrice, digits),
-         DoubleToString(vt.sl, digits)
+         vt.currentRR,
+         DoubleToString(vt.sl, digits),
+         timeNotice
       );
    } else {
       msg = StringFormat(

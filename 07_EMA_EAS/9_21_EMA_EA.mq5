@@ -193,11 +193,48 @@ struct TradeRecord
    double   closePrice;
    double   sl;
    double   tp;
+   double   initialRiskDist;     // Immutable initial risk distance
+   bool     reachedBE;           // One-time BE flag
    double   profit;
    datetime openTime;
    datetime closeTime;
    string   reason;
 };
+
+//+------------------------------------------------------------------+
+//| Helper to retrieve immutable initial risk distance               |
+//+------------------------------------------------------------------+
+double GetInitialRiskForTicket(const ulong t, const double fallbackSLDist)
+{
+   for(int i = 0; i < ::ArraySize(g_journal); i++)
+   {
+      if(g_journal[i].ticket == t && g_journal[i].initialRiskDist > 0.0)
+         return g_journal[i].initialRiskDist;
+   }
+   return fallbackSLDist;
+}
+
+bool HasTicketReachedBE(const ulong t)
+{
+   for(int i = 0; i < ::ArraySize(g_journal); i++)
+   {
+      if(g_journal[i].ticket == t)
+         return g_journal[i].reachedBE;
+   }
+   return false;
+}
+
+void SetTicketReachedBE(const ulong t)
+{
+   for(int i = 0; i < ::ArraySize(g_journal); i++)
+   {
+      if(g_journal[i].ticket == t)
+      {
+         g_journal[i].reachedBE = true;
+         return;
+      }
+   }
+}
 
 //+------------------------------------------------------------------+
 //| GLOBAL VARIABLES                                                 |
@@ -800,29 +837,34 @@ void ManageActiveTrades(const string sym)
       double slDist = MathAbs(openPrice - currentSL);
       AssetCalibration cal = GetSymbolCalibration(sym);
       
-      // 1. Break Even
-      if(InpEnableBreakEven && currentSL != 0.0)
-      {
-         bool triggerBE = false;
-         double bePointsDist = cal.bePoints * point;
-         double beSafetyDist = cal.beSafety * point;
+      // 1. Break Even (Genuine R-Based with Dynamic Spread Protection)
+      double initialRisk = GetInitialRiskForTicket(ticket, slDist);
+      if(initialRisk <= 0) initialRisk = slDist;
 
-         if(posType == POSITION_TYPE_BUY && (currentPrice - openPrice) >= bePointsDist)
+      if(InpEnableBreakEven && currentSL != 0.0 && initialRisk > 0.0 && !HasTicketReachedBE(ticket))
+      {
+         double currentProfitDist = (posType == POSITION_TYPE_BUY) ? (currentPrice - openPrice) : (openPrice - currentPrice);
+         double currentR = currentProfitDist / initialRisk;
+
+         if(currentR >= InpBERrTrigger)
          {
-            double desiredBE = openPrice + beSafetyDist;
-            if(currentSL < desiredBE - (point * 0.5))
+            int currentSpread = (int)::SymbolInfoInteger(sym, SYMBOL_SPREAD);
+            if(currentSpread < 1) currentSpread = 1;
+            double spreadOffset = currentSpread * point * 1.5;
+            double riskOffset   = initialRisk * 0.05;
+            double beSafetyDist = MathMax(spreadOffset, riskOffset);
+
+            double desiredBE = (posType == POSITION_TYPE_BUY) ? (openPrice + beSafetyDist) : (openPrice - beSafetyDist);
+            desiredBE = ::NormalizeDouble(desiredBE, digits);
+
+            bool isValidImprovement = (posType == POSITION_TYPE_BUY) ? (currentSL < desiredBE - (point * 0.5))
+                                                                    : (currentSL > desiredBE + (point * 0.5) || currentSL == 0.0);
+            if(isValidImprovement)
             {
-               ModifyPositionSLTP(ticket, sym, ::NormalizeDouble(desiredBE, digits), currentTP);
-               ::PrintFormat("[9_21_EMA_EA] Break Even Applied on BUY #%I64u @ %.5f", ticket, desiredBE);
-            }
-         }
-         else if(posType == POSITION_TYPE_SELL && (openPrice - currentPrice) >= bePointsDist)
-         {
-            double desiredBE = openPrice - beSafetyDist;
-            if(currentSL > desiredBE + (point * 0.5) || currentSL == 0.0)
-            {
-               ModifyPositionSLTP(ticket, sym, ::NormalizeDouble(desiredBE, digits), currentTP);
-               ::PrintFormat("[9_21_EMA_EA] Break Even Applied on SELL #%I64u @ %.5f", ticket, desiredBE);
+               ModifyPositionSLTP(ticket, sym, desiredBE, currentTP);
+               SetTicketReachedBE(ticket);
+               ::PrintFormat("[9_21_EMA_EA] R-Based Break Even (+%.2fR) Applied on Ticket #%I64u @ %.5f (InitialRisk: %.5f, Offset: %.5f)",
+                             currentR, ticket, desiredBE, initialRisk, beSafetyDist);
             }
          }
       }
@@ -1189,16 +1231,21 @@ void RecordTradeJournal(const ulong ticket, const string sym, const int type, co
    int size = ::ArraySize(g_journal);
    ::ArrayResize(g_journal, size + 1);
    
-   g_journal[size].ticket    = ticket;
-   g_journal[size].symbol    = sym;
-   g_journal[size].type      = type;
-   g_journal[size].openPrice = price;
-   g_journal[size].sl        = sl;
-   g_journal[size].tp        = tp;
-   g_journal[size].openTime  = ::TimeCurrent();
-   g_journal[size].reason    = reason;
+   double riskDist = MathAbs(price - sl);
+   if(riskDist <= 0) riskDist = 100.0 * SymbolInfoDouble(sym, SYMBOL_POINT);
+
+   g_journal[size].ticket          = ticket;
+   g_journal[size].symbol          = sym;
+   g_journal[size].type            = type;
+   g_journal[size].openPrice       = price;
+   g_journal[size].sl              = sl;
+   g_journal[size].tp              = tp;
+   g_journal[size].initialRiskDist = riskDist;
+   g_journal[size].reachedBE       = false;
+   g_journal[size].openTime        = ::TimeCurrent();
+   g_journal[size].reason          = reason;
    
-   ::Print("Journal Record Added: Ticket #", ticket, " | Symbol: ", sym, " | Reason: ", reason);
+   ::PrintFormat("Journal Record Added: Ticket #%I64u | %s | InitialRisk: %.5f | Reason: %s", ticket, sym, riskDist, reason);
 }
 
 int CountTotalOpenPositions()
