@@ -157,8 +157,8 @@ input int      InpBrokerUTCOffset     = 2;         // Broker Server Time UTC Off
 
 input group "=== Telegram Intelligence & Chart Capture ==="
 input bool     InpEnableTelegram      = true;                                           // Enable Telegram Notifications
-input string   InpTelegramBotToken    = "8977669207:AAH1nGIjVzAgIXuesNmtzZKAzF9garPWCno"; // Telegram Bot Token (@chartoramainbot)
-input string   InpTelegramChatID      = "-1004400312129";                               // Telegram Chat / Channel ID (Chartora Official)
+input string   InpTelegramBotToken    = "8879760522:AAEyunvk7loVNxYZTc995Zj2VH2xn5snIyQ"; // Telegram Bot Token (@hrmarketsignalalertbot)
+input string   InpTelegramChatID      = "-1003870194891";                               // Telegram Chat / Channel ID (9/21 EMA MULTI-PAIR SCANNER V1)
 input bool     InpSendSignalChart     = true;                                           // Send Independent Signal Chart Image
 input int      InpScreenshotWidth     = 1280;                                           // Image Width (Pixels)
 input int      InpScreenshotHeight    = 720;                                            // Image Height (Pixels)
