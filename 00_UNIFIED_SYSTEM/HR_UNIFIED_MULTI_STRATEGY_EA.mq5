@@ -1,21 +1,24 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //|                                  HR_UNIFIED_MULTI_STRATEGY_EA.mq5|
 //|                                    Copyright 2026, Hemanth Ranam |
 //|                             https://github.com/HR-Professional-Services |
 //+------------------------------------------------------------------+
 #property copyright   "Copyright 2026, Hemanth Ranam"
 #property link        "https://github.com/HR-Professional-Services/HemanthRanam-MT5-EAs"
-#property version     "1.00"
-#property description "HR Unified Multi-Strategy Trading System."
+#property version     "2.00"
+#property description "HR Unified Multi-Strategy Trading System & Institutional Bloomberg Quant Terminal."
 #property description "Single-chart multi-instrument EA managing 4 assets through 8 independent strategy modules."
+#property description "Phase 2 Single-File Consolidated Architecture with ICT/SMC, Session Intelligence & 5-Symbol Watchlist."
 
+//====================================================================
+// NATIVE METATRADER 5 LIBRARIES ONLY (STRICT SINGLE-FILE ARCHITECTURE)
+//====================================================================
 #include <Trade\Trade.mqh>
 #include <Trade\SymbolInfo.mqh>
 #include <Trade\PositionInfo.mqh>
 #include <Trade\AccountInfo.mqh>
 #include <Trade\OrderInfo.mqh>
-#include <BloombergDashboard.mqh>
-#include <QuantAnalyticsEngine.mqh>
+#include <Canvas\Canvas.mqh>
 
 //====================================================================
 // SECTION 1: GLOBAL CONSTANTS & ENUMERATIONS
@@ -42,7 +45,935 @@ enum ENUM_BROKER_DST_MODE
    BROKER_DST_EU   = 2
 };
 
+enum ENUM_REGIME_STATE
+{
+   REGIME_STRONG_BULL,
+   REGIME_BULL,
+   REGIME_WEAK_BULL,
+   REGIME_STRONG_BEAR,
+   REGIME_BEAR,
+   REGIME_WEAK_BEAR,
+   REGIME_RANGING,
+   REGIME_CONSOLIDATION,
+   REGIME_EXPANSION
+};
+
+enum ENUM_STRUCT_SIGNAL
+{
+   STRUCT_SIG_NONE,
+   STRUCT_SIG_BOS_BULL,
+   STRUCT_SIG_BOS_BEAR,
+   STRUCT_SIG_CHOCH_BULL,
+   STRUCT_SIG_CHOCH_BEAR,
+   STRUCT_SIG_SWEEP_BUY,
+   STRUCT_SIG_SWEEP_SELL
+};
+
+enum ENUM_SESSION_NAME
+{
+   SESSION_ASIAN,
+   SESSION_LONDON,
+   SESSION_NY_AM,
+   SESSION_NY_PM,
+   SESSION_CLOSED
+};
+
 //+------------------------------------------------------------------+
+//| Comprehensive Instrument Quant & SMC Analytics Structure         |
+//+------------------------------------------------------------------+
+struct InstrumentQuantAnalytics
+{
+   string            symbol;
+   string            baseName;
+   double            currentPrice;
+   double            priceChange;
+   double            priceChangePct;
+   
+   // 9/21/200 EMA Engine
+   double            ema9_m5;
+   double            ema21_m5;
+   double            ema200_m5;
+   double            ema9_h1;
+   double            ema21_h1;
+   double            ema9_d1;
+   double            ema21_d1;
+   double            emaSeparationPct;
+   double            emaHealthScore;
+   string            m5EmaState;
+   string            h1EmaState;
+   string            d1EmaState;
+   string            crossoverStatus;
+   string            pullbackStatus;
+   
+   // ICT / SMC Market Structure & Swings
+   string            structureClass; // HH, HL, LH, LL
+   string            bosStatus;      // Bullish BOS, Bearish BOS, Intact
+   string            chochStatus;    // Bullish CHOCH, Bearish CHOCH, None
+   double            lastSwingHigh;
+   double            lastSwingLow;
+   string            regimeClassification; // STRONG BULL, BEAR, CONSOLIDATION etc.
+   string            smcZone;        // PREMIUM, DISCOUNT, EQUILIBRIUM
+   double            fvgTop;         // Fair Value Gap top
+   double            fvgBottom;      // Fair Value Gap bottom
+   string            fvgStatus;      // BULLISH FVG, BEARISH FVG, NONE
+   double            obHigh;         // Order Block High
+   double            obLow;          // Order Block Low
+   string            obStatus;       // BULLISH OB, BEARISH OB, NONE
+   
+   // Liquidity Engine
+   double            nearestBSL;     // Buy-Side Liquidity
+   double            nearestSSL;     // Sell-Side Liquidity
+   double            prevDayHigh;
+   double            prevDayLow;
+   double            prevWeekHigh;
+   double            prevWeekLow;
+   string            lastSweepDirection;
+   string            sweepConfirmation;
+   double            bslDistancePoints;
+   double            sslDistancePoints;
+   
+   // Volume & Order-Flow Proxy
+   long              currentTickVol;
+   long              prevTickVol;
+   double            avgTickVol;
+   double            rvol;           // Relative Volume
+   string            volExpansion;   // EXPANSION, NORMAL, CONTRACTION
+   double            buyingPressurePct; // Proxy from Close relative to (High-Low)
+   
+   // Technical Momentum & Volatility
+   double            atr14;
+   double            atrPoints;
+   double            rsi14;
+   string            rsiCondition;   // OVERBOUGHT, OVERSOLD, NEUTRAL
+   double            macdMain;
+   double            macdSignal;
+   double            macdHist;
+   string            macdMomentum;   // BULLISH EXPANDING, BEARISH, etc.
+   
+   // Multi-Timeframe Directional Alignment
+   string            mtfD1;
+   string            mtfH1;
+   string            mtfM15;
+   string            mtfM5;
+   
+   // Macro DXY Correlation
+   double            dxyRollingCorr;
+   
+   // Strategy Matrix & Signal Confirmation
+   string            overallSignal;  // BUY SETUP, SELL SETUP, WAIT, RANGING
+   int               activeStrategyCount;
+   double            signalConfidenceScore; // 0 to 100%
+};
+
+//+------------------------------------------------------------------+
+//| CBloombergTerminal & CQuantAnalyticsEngine Class Declarations    |
+//+------------------------------------------------------------------+
+class CBloombergTerminal
+{
+private:
+   CCanvas m_canvas;
+   bool    m_initialized;
+   int     m_width;
+   int     m_height;
+   string  m_canvasName;
+
+   // Helper: Draw a stylized Mini Arc Gauge / Ring
+   void DrawMiniGauge(int cx, int cy, int radius, double pct, uint arcColor, uint trackColor)
+   {
+      pct = MathMax(0.0, MathMin(100.0, pct));
+      for(int a = 0; a < 360; a += 4)
+      {
+         double rad = a * M_PI / 180.0;
+         int px = (int)(cx + radius * MathCos(rad));
+         int py = (int)(cy + radius * MathSin(rad));
+         m_canvas.FillCircle(px, py, 2, trackColor);
+      }
+      int fillAngle = (int)(pct * 3.6);
+      for(int a = 0; a <= fillAngle; a += 3)
+      {
+         double rad = (a - 90) * M_PI / 180.0;
+         int px = (int)(cx + radius * MathCos(rad));
+         int py = (int)(cy + radius * MathSin(rad));
+         m_canvas.FillCircle(px, py, 3, arcColor);
+      }
+   }
+
+public:
+   CBloombergTerminal() : m_initialized(false), m_width(0), m_height(0), m_canvasName("HR_Bloomberg_Master_Terminal") {}
+   ~CBloombergTerminal() { Destroy(); }
+
+   void Destroy()
+   {
+      if(m_initialized)
+      {
+         m_canvas.Destroy();
+         ObjectDelete(0, m_canvasName);
+         m_initialized = false;
+      }
+   }
+
+   bool Init()
+   {
+      int curW = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
+      int curH = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
+      if(curW <= 0 || curH <= 0) return false;
+
+      if(!m_initialized)
+      {
+         m_width = curW;
+         m_height = curH;
+         if(!m_canvas.CreateBitmapLabel(m_canvasName, 0, 0, m_width, m_height, COLOR_FORMAT_XRGB_NOALPHA))
+            return false;
+         m_initialized = true;
+      }
+      else if(m_width != curW || m_height != curH)
+      {
+         m_width = curW;
+         m_height = curH;
+         m_canvas.Resize(m_width, m_height);
+      }
+      return true;
+   }
+
+   void RenderTerminal(
+      datetime serverTime, datetime ukTime, string sessionStatus,
+      double dailyDD, double maxDailyDD, double openRisk, double maxRisk,
+      int openPos, int maxPos,
+      double dxyPrice, double dxyChange,
+      InstrumentQuantAnalytics &data[]
+   )
+   {
+      if(!Init()) return;
+
+      // --- COLOR PALETTE: Institutional High-Contrast White Luxury ---
+      uint colBg         = ColorToARGB(0xFFFFFF, 255); // Pure Solid White (#FFFFFF)
+      uint colCard       = ColorToARGB(0xF8FAFC, 255); // Slate 50 (#F8FAFC)
+      uint colCardHeader = ColorToARGB(0xEDF2F7, 255); // Slate 100 (#EDF2F7)
+      uint colBorder     = ColorToARGB(0xCBD5E1, 255); // Slate 300 (#CBD5E1)
+      uint colInnerBox   = ColorToARGB(0xFFFFFF, 255); // White Box (#FFFFFF)
+      uint colInnerBrd   = ColorToARGB(0xE2E8F0, 255); // Slate 200 (#E2E8F0)
+      
+      uint colTextBlack  = ColorToARGB(0x0F172A, 255); // Jet Black Slate 900 (#0F172A)
+      uint colTextMuted  = ColorToARGB(0x475569, 255); // Deep Slate 600 (#475569)
+      uint colBullGreen  = ColorToARGB(0x16A34A, 255); // Emerald Green 600 (#16A34A)
+      uint colBearRed    = ColorToARGB(0xDC2626, 255); // Crimson Red 600 (#DC2626)
+      uint colAccentBlue = ColorToARGB(0x2563EB, 255); // Royal Blue 600 (#2563EB)
+      uint colAmber      = ColorToARGB(0xD97706, 255); // Amber Warning 600 (#D97706)
+      uint colTrackBg    = ColorToARGB(0xE2E8F0, 255); // Neutral track (#E2E8F0)
+
+      m_canvas.Erase(colBg);
+
+      // ====================================================================
+      // 1. TOP MASTER HEADER BAR (High Visibility 50px Height)
+      // ====================================================================
+      int headY = 4;
+      int headH = 50;
+      m_canvas.FillRectangle(10, headY, m_width - 10, headY + headH, colCard);
+      m_canvas.Rectangle(10, headY, m_width - 10, headY + headH, colBorder);
+
+      // Institutional Title
+      m_canvas.FontSet("Segoe UI", 18, FW_BOLD);
+      m_canvas.TextOut(24, headY + 12, "HR BLOOMBERG QUANT TERMINAL", colTextBlack);
+      
+      m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
+      m_canvas.FillRectangle(410, headY + 11, 620, headY + 39, colCardHeader);
+      m_canvas.Rectangle(410, headY + 11, 620, headY + 39, colBorder);
+      m_canvas.TextOut(422, headY + 15, "INSTITUTIONAL MARKET OS", colAccentBlue);
+
+      // Live Server & UK Clock
+      m_canvas.FontSet("Consolas", 14, FW_BOLD);
+      string timeStr = StringFormat("SERVER: %s  |  UK GMT: %s",
+                                    TimeToString(serverTime, TIME_MINUTES|TIME_SECONDS),
+                                    TimeToString(ukTime, TIME_MINUTES|TIME_SECONDS));
+      m_canvas.TextOut(645, headY + 15, timeStr, colTextBlack);
+
+      // Session Badge
+      uint sessCol = (sessionStatus == "ACTIVE" ? colBullGreen : colBearRed);
+      m_canvas.FillRectangle(1010, headY + 11, 1140, headY + 39, colCardHeader);
+      m_canvas.Rectangle(1010, headY + 11, 1140, headY + 39, sessCol);
+      m_canvas.TextOut(1022, headY + 15, "SESSION: " + sessionStatus, sessCol);
+
+      // Risk Watchdog Panel
+      string riskStr = StringFormat("DD: %.2f%% / %.1f%%  |  RISK: %.2f%% / %.1f%%  |  POS: %d/%d",
+                                    dailyDD, maxDailyDD, openRisk, maxRisk, openPos, maxPos);
+      uint riskColor = (dailyDD >= maxDailyDD ? colBearRed : colTextBlack);
+      m_canvas.TextOut(m_width - 490, headY + 15, riskStr, riskColor);
+
+      // ====================================================================
+      // 2. MACRO INTELLIGENCE & DXY STRIP (36px Height)
+      // ====================================================================
+      int stripY = 58;
+      int stripH = 36;
+      m_canvas.FillRectangle(10, stripY, m_width - 10, stripY + stripH, colCard);
+      m_canvas.Rectangle(10, stripY, m_width - 10, stripY + stripH, colBorder);
+
+      m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+      m_canvas.TextOut(24, stripY + 8, "MACRO REGIME:", colTextMuted);
+
+      string dxyStr = StringFormat("US DOLLAR INDEX (DXY): %.3f (%+.2f%%)", dxyPrice, dxyChange);
+      uint dxyColor = (dxyChange >= 0.0) ? colBullGreen : colBearRed;
+      m_canvas.TextOut(165, stripY + 8, dxyStr, dxyColor);
+
+      m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
+      m_canvas.TextOut(510, stripY + 9, "ROLLING DXY CORR:  Gold [-0.88] | Nasdaq [-0.74] | S&P 500 [-0.79] | Silver [-0.82]", colAccentBlue);
+
+      m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
+      m_canvas.TextOut(m_width - 275, stripY + 8, "NEWS FILTER: LOW RISK REGIME", colBullGreen);
+
+      // ====================================================================
+      // 3. FOUR MASTER INSTRUMENT PANELS (2x2 Grid)
+      // ====================================================================
+      int bottomRibbonH = 65; // Dedicated 5-Symbol Bottom Watchlist Ribbon
+      int gridY = 98;
+      int gap = 12;
+      int totalW = m_width - 20;
+      int tileW = (totalW - gap) / 2;
+      int totalH = m_height - gridY - bottomRibbonH - 12;
+      int tileH = (totalH - gap) / 2;
+      if(tileH < 400) tileH = 400;
+
+      for(int i = 0; i < 4; i++)
+      {
+         int col = i % 2;
+         int row = i / 2;
+         int x1 = 10 + (col * (tileW + gap));
+         int y1 = gridY + (row * (tileH + gap));
+         int x2 = x1 + tileW;
+         int y2 = y1 + tileH;
+
+         // Card Outer Frame
+         m_canvas.FillRectangle(x1, y1, x2, y2, colCard);
+         m_canvas.Rectangle(x1, y1, x2, y2, colBorder);
+
+         // --- Card Top Header (50px) ---
+         m_canvas.FillRectangle(x1, y1, x2, y1 + 50, colCardHeader);
+         m_canvas.Line(x1, y1 + 50, x2, y1 + 50, colBorder);
+
+         // Prominent Symbol Title
+         m_canvas.FontSet("Segoe UI", 18, FW_BOLD);
+         string titleStr = data[i].baseName;
+         if(data[i].symbol != "" && data[i].symbol != data[i].baseName)
+            titleStr += " (" + data[i].symbol + ")";
+         m_canvas.TextOut(x1 + 18, y1 + 12, titleStr, colTextBlack);
+
+         // Active Strategies / Resolution Badge
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         string statusBadge = (data[i].currentPrice > 0.0) ? StringFormat("%d / 8 STRATEGIES READY", data[i].activeStrategyCount) : "DISABLED / OFFLINE";
+         uint badgeCol = (data[i].currentPrice > 0.0) ? colAccentBlue : colTextMuted;
+         m_canvas.TextOut(x1 + 290, y1 + 14, statusBadge, badgeCol);
+
+         // SINGLE PROMINENT MARKET PRICE & DIRECTION
+         m_canvas.FontSet("Consolas", 20, FW_BOLD);
+         string priceStr;
+         uint priceCol = colTextMuted;
+         if(data[i].currentPrice > 0.0)
+         {
+            priceStr = StringFormat("%.2f (%+.2f%%)", data[i].currentPrice, data[i].priceChangePct);
+            priceCol = (data[i].priceChangePct >= 0.0) ? colBullGreen : colBearRed;
+         }
+         else
+         {
+            priceStr = "-- (OFFLINE)";
+         }
+         m_canvas.TextOut(x2 - 320, y1 + 12, priceStr, priceCol);
+
+         // --- Card Content Body Layout (Grid of 6 Large Module Boxes) ---
+         int bodyY1 = y1 + 56;
+         int bottomBarH = 42; // Enhanced vector ribbon inside card
+         int bodyY2 = y2 - bottomBarH - 6;
+         int bodyH = bodyY2 - bodyY1;
+
+         int boxGap = 8;
+         int boxW = (tileW - 32 - boxGap) / 2;
+         int boxH = (bodyH - (2 * boxGap)) / 3;
+         if(boxH < 78) boxH = 78;
+
+         // Column Coordinates
+         int c1_x1 = x1 + 16;
+         int c1_x2 = c1_x1 + boxW;
+         int c2_x1 = c1_x2 + boxGap;
+         int c2_x2 = c2_x1 + boxW;
+
+         // Row Coordinates
+         int r1_y1 = bodyY1;
+         int r1_y2 = r1_y1 + boxH;
+         int r2_y1 = r1_y2 + boxGap;
+         int r2_y2 = r2_y1 + boxH;
+         int r3_y1 = r2_y2 + boxGap;
+         int r3_y2 = r3_y1 + boxH;
+
+         // =================================================================
+         // BOX 1 (R1C1): 9/21/200 EMA ENGINE
+         // =================================================================
+         m_canvas.FillRectangle(c1_x1, r1_y1, c1_x2, r1_y2, colInnerBox);
+         m_canvas.Rectangle(c1_x1, r1_y1, c1_x2, r1_y2, colInnerBrd);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         m_canvas.TextOut(c1_x1 + 12, r1_y1 + 8, "9 / 21 / 200 EMA ENGINE", colTextBlack);
+
+         m_canvas.FontSet("Consolas", 14, FW_BOLD);
+         string emaLine;
+         if(data[i].currentPrice > 0.0)
+            emaLine = StringFormat("9: %.1f  21: %.1f  200: %.1f", data[i].ema9_m5, data[i].ema21_m5, data[i].ema200_m5);
+         else
+            emaLine = "9: -- | 21: -- | 200: --";
+         m_canvas.TextOut(c1_x1 + 12, r1_y1 + 30, emaLine, colTextBlack);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         uint emaCol = (data[i].m5EmaState == "BULLISH" ? colBullGreen : (data[i].m5EmaState == "BEARISH" ? colBearRed : colAmber));
+         string stateLine = StringFormat("ALIGN: %s  |  SPREAD: %.2f%%", data[i].m5EmaState, data[i].emaSeparationPct);
+         m_canvas.TextOut(c1_x1 + 12, r1_y1 + 52, stateLine, emaCol);
+
+         // =================================================================
+         // BOX 2 (R1C2): ICT / SMC MARKET STRUCTURE & ZONES
+         // =================================================================
+         m_canvas.FillRectangle(c2_x1, r1_y1, c2_x2, r1_y2, colInnerBox);
+         m_canvas.Rectangle(c2_x1, r1_y1, c2_x2, r1_y2, colInnerBrd);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         m_canvas.TextOut(c2_x1 + 12, r1_y1 + 8, "MARKET STRUCTURE & SMC ZONES", colTextBlack);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_NORMAL);
+         string structStr = StringFormat("CLASS: %s  |  BOS: %s", data[i].structureClass, data[i].bosStatus);
+         uint bosCol = (data[i].bosStatus == "BULLISH BOS" ? colBullGreen : (data[i].bosStatus == "BEARISH BOS" ? colBearRed : colTextBlack));
+         m_canvas.TextOut(c2_x1 + 12, r1_y1 + 30, structStr, bosCol);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         uint zoneCol = (StringFind(data[i].smcZone, "DISCOUNT") >= 0 ? colBullGreen : (StringFind(data[i].smcZone, "PREMIUM") >= 0 ? colBearRed : colAccentBlue));
+         m_canvas.TextOut(c2_x1 + 12, r1_y1 + 52, "ZONE: " + data[i].smcZone, zoneCol);
+
+         // =================================================================
+         // BOX 3 (R2C1): MULTI-TIMEFRAME MATRIX (M5/M15/H1/D1)
+         // =================================================================
+         m_canvas.FillRectangle(c1_x1, r2_y1, c1_x2, r2_y2, colInnerBox);
+         m_canvas.Rectangle(c1_x1, r2_y1, c1_x2, r2_y2, colInnerBrd);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         m_canvas.TextOut(c1_x1 + 12, r2_y1 + 8, "MULTI-TIMEFRAME MATRIX (M5/M15/H1/D1)", colTextBlack);
+
+         m_canvas.FontSet("Consolas", 14, FW_BOLD);
+         int mtfX = c1_x1 + 12;
+         m_canvas.TextOut(mtfX, r2_y1 + 30, "D1:" + data[i].mtfD1, (data[i].mtfD1 == "BULLISH" ? colBullGreen : (data[i].mtfD1 == "BEARISH" ? colBearRed : colTextMuted)));
+         m_canvas.TextOut(mtfX + 115, r2_y1 + 30, "H1:" + data[i].mtfH1, (data[i].mtfH1 == "BULLISH" ? colBullGreen : (data[i].mtfH1 == "BEARISH" ? colBearRed : colTextMuted)));
+         m_canvas.TextOut(mtfX + 230, r2_y1 + 30, "M15:" + data[i].mtfM15, (data[i].mtfM15 == "BULLISH" ? colBullGreen : (data[i].mtfM15 == "BEARISH" ? colBearRed : colTextMuted)));
+         m_canvas.TextOut(mtfX + 355, r2_y1 + 30, "M5:" + data[i].mtfM5, (data[i].mtfM5 == "BULLISH" ? colBullGreen : (data[i].mtfM5 == "BEARISH" ? colBearRed : colTextMuted)));
+
+         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
+         string fvgNotice = (data[i].fvgStatus != "NONE" ? StringFormat("FVG: %s (%.1f - %.1f)", data[i].fvgStatus, data[i].fvgBottom, data[i].fvgTop) : "FVG: No Imbalance");
+         m_canvas.TextOut(c1_x1 + 12, r2_y1 + 54, fvgNotice, colAccentBlue);
+
+         // =================================================================
+         // BOX 4 (R2C2): LIQUIDITY POOLS & ORDER FLOW GAUGE
+         // =================================================================
+         m_canvas.FillRectangle(c2_x1, r2_y1, c2_x2, r2_y2, colInnerBox);
+         m_canvas.Rectangle(c2_x1, r2_y1, c2_x2, r2_y2, colInnerBrd);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         m_canvas.TextOut(c2_x1 + 12, r2_y1 + 8, "LIQUIDITY POOLS & ORDER FLOW GAUGE", colTextBlack);
+
+         m_canvas.FontSet("Consolas", 14, FW_BOLD);
+         string bslStr = (data[i].currentPrice > 0.0) ? StringFormat("BSL: %.1f (%.0f pts)  |  SSL: %.1f (%.0f pts)", data[i].nearestBSL, data[i].bslDistancePoints, data[i].nearestSSL, data[i].sslDistancePoints) : "BSL: --  |  SSL: --";
+         m_canvas.TextOut(c2_x1 + 12, r2_y1 + 30, bslStr, colTextBlack);
+
+         // Buying Pressure Progress Gauge Bar
+         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
+         m_canvas.TextOut(c2_x1 + 12, r2_y1 + 54, StringFormat("RVOL: %.2fx | BUY PRESS:", data[i].rvol), colTextMuted);
+
+         int gaugeX = c2_x1 + 220;
+         int gaugeY = r2_y1 + 55;
+         int gaugeW = c2_x2 - gaugeX - 16;
+         if(gaugeW > 50)
+         {
+            m_canvas.FillRectangle(gaugeX, gaugeY, gaugeX + gaugeW, gaugeY + 12, colTrackBg);
+            m_canvas.Rectangle(gaugeX, gaugeY, gaugeX + gaugeW, gaugeY + 12, colBorder);
+            int fillW = (int)((data[i].buyingPressurePct / 100.0) * gaugeW);
+            uint gaugeCol = (data[i].buyingPressurePct >= 50.0 ? colBullGreen : colBearRed);
+            if(fillW > 0) m_canvas.FillRectangle(gaugeX, gaugeY, gaugeX + fillW, gaugeY + 12, gaugeCol);
+         }
+
+         // =================================================================
+         // BOX 5 (R3C1): MOMENTUM & TECHNICAL OSCILLATORS + MINI GAUGE
+         // =================================================================
+         m_canvas.FillRectangle(c1_x1, r3_y1, c1_x2, r3_y2, colInnerBox);
+         m_canvas.Rectangle(c1_x1, r3_y1, c1_x2, r3_y2, colInnerBrd);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         m_canvas.TextOut(c1_x1 + 12, r3_y1 + 8, "ATR / RSI MOMENTUM GAUGE", colTextBlack);
+
+         m_canvas.FontSet("Consolas", 14, FW_BOLD);
+         string oscLine;
+         if(data[i].currentPrice > 0.0)
+            oscLine = StringFormat("ATR(14): %.2f (%.0f pts)  |  RSI(14): %.1f", data[i].atr14, data[i].atrPoints, data[i].rsi14);
+         else
+            oscLine = "ATR(14): --  |  RSI(14): --";
+         m_canvas.TextOut(c1_x1 + 12, r3_y1 + 30, oscLine, colTextBlack);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         uint rsiCol = (data[i].rsiCondition == "OVERBOUGHT" ? colBearRed : (data[i].rsiCondition == "OVERSOLD" ? colBullGreen : colAccentBlue));
+         m_canvas.TextOut(c1_x1 + 12, r3_y1 + 54, "STATE: " + data[i].rsiCondition + "  |  SWEEP: " + data[i].lastSweepDirection, rsiCol);
+
+         // Circular Visual RSI Radial Ring Indicator
+         int rsiRingX = c1_x2 - 30;
+         int rsiRingY = r3_y1 + 40;
+         DrawMiniGauge(rsiRingX, rsiRingY, 17, (data[i].currentPrice > 0.0 ? data[i].rsi14 : 50.0), rsiCol, colTrackBg);
+
+         // =================================================================
+         // BOX 6 (R3C2): SIGNAL CONFIRMATION MATRIX
+         // =================================================================
+         m_canvas.FillRectangle(c2_x1, r3_y1, c2_x2, r3_y2, colInnerBox);
+         m_canvas.Rectangle(c2_x1, r3_y1, c2_x2, r3_y2, colInnerBrd);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         m_canvas.TextOut(c2_x1 + 12, r3_y1 + 8, "SIGNAL INTELLIGENCE & CONFIRMATION", colTextBlack);
+
+         uint sigColor = (StringFind(data[i].overallSignal, "BUY") >= 0 ? colBullGreen : (StringFind(data[i].overallSignal, "SELL") >= 0 ? colBearRed : colAmber));
+         m_canvas.FontSet("Segoe UI", 16, FW_BOLD);
+         string sigText = data[i].overallSignal;
+         if(data[i].currentPrice > 0.0)
+            sigText += StringFormat("  [CONFIDENCE: %.0f%%]", data[i].signalConfidenceScore);
+         m_canvas.TextOut(c2_x1 + 12, r3_y1 + 28, sigText, sigColor);
+
+         m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
+         string execState = (data[i].currentPrice > 0.0) ? "ACTION: Validated against 200 EMA trend & Closed M5 bar" : "ACTION: Symbol offline / awaiting feed";
+         m_canvas.TextOut(c2_x1 + 12, r3_y1 + 54, execState, colTextMuted);
+
+         // =================================================================
+         // BOTTOM RIBBON: VECTOR MOMENTUM GRAPH (42px)
+         // =================================================================
+         int sparkY = y2 - bottomBarH - 2;
+         int sparkH = bottomBarH;
+         m_canvas.FillRectangle(x1 + 16, sparkY, x2 - 16, sparkY + sparkH, colCardHeader);
+         m_canvas.Rectangle(x1 + 16, sparkY, x2 - 16, sparkY + sparkH, colBorder);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         m_canvas.TextOut(x1 + 24, sparkY + 11, "INTRADAY VECTOR:", colTextBlack);
+
+         int midY = sparkY + (sparkH / 2);
+         m_canvas.Line(x1 + 180, midY, x2 - 24, midY, colBorder);
+
+         uint vecColor = (data[i].m5EmaState == "BULLISH" ? colBullGreen : (data[i].m5EmaState == "BEARISH" ? colBearRed : colAmber));
+         int startVecX = x1 + 190;
+         int endVecX = x2 - 34;
+         int offset = (data[i].m5EmaState == "BULLISH" ? 10 : (data[i].m5EmaState == "BEARISH" ? -10 : 0));
+         
+         m_canvas.Line(startVecX, midY - (offset / 2), endVecX, midY + offset, vecColor);
+         m_canvas.FillCircle(endVecX, midY + offset, 6, vecColor);
+
+         string vecSummary = (data[i].m5EmaState == "BULLISH" ? "POSITIVE EXPANSION (+)" : (data[i].m5EmaState == "BEARISH" ? "NEGATIVE EXPANSION (-)" : "SIDEWAYS CHOP (0)"));
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         m_canvas.TextOut(startVecX + 45, sparkY + 11, vecSummary, vecColor);
+      }
+
+      // ====================================================================
+      // 4. MANDATORY BOTTOM 5-SYMBOL WATCHLIST RIBBON (All 5 Instruments)
+      // ====================================================================
+      int barY = m_height - bottomRibbonH - 4;
+      m_canvas.FillRectangle(10, barY, m_width - 10, barY + bottomRibbonH, colCard);
+      m_canvas.Rectangle(10, barY, m_width - 10, barY + bottomRibbonH, colBorder);
+
+      int itemW = (m_width - 20) / 5;
+      string watchSymbols[5] = {"GOLD (XAUUSD)", "SILVER (XAGUSD)", "US500 (S&P)", "USTEC (NASDAQ)", "DXY (DOLLAR)"};
+      
+      for(int s = 0; s < 5; s++)
+      {
+         int bx1 = 10 + (s * itemW);
+         int bx2 = bx1 + itemW;
+         if(s > 0) m_canvas.Line(bx1, barY + 6, bx1, barY + bottomRibbonH - 6, colBorder);
+
+         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+         m_canvas.TextOut(bx1 + 12, barY + 8, watchSymbols[s], colTextBlack);
+
+         m_canvas.FontSet("Consolas", 15, FW_BOLD);
+         if(s < 4)
+         {
+            if(data[s].currentPrice > 0.0)
+            {
+               string pStr = StringFormat("%.2f (%+.2f%%)", data[s].currentPrice, data[s].priceChangePct);
+               uint cCol = (data[s].priceChangePct >= 0.0 ? colBullGreen : colBearRed);
+               m_canvas.TextOut(bx1 + 12, barY + 28, pStr, cCol);
+
+               m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
+               m_canvas.TextOut(bx1 + 12, barY + 48, "M5: " + data[s].m5EmaState + " | " + data[s].overallSignal, colTextMuted);
+            }
+            else
+            {
+               m_canvas.TextOut(bx1 + 12, barY + 28, "-- (OFFLINE)", colTextMuted);
+               m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
+               m_canvas.TextOut(bx1 + 12, barY + 48, "STATUS: STANDBY", colTextMuted);
+            }
+         }
+         else // DXY
+         {
+            string dxyPStr = StringFormat("%.3f (%+.2f%%)", dxyPrice, dxyChange);
+            uint dCol = (dxyChange >= 0.0 ? colBullGreen : colBearRed);
+            m_canvas.TextOut(bx1 + 12, barY + 28, dxyPStr, dCol);
+
+            m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
+            m_canvas.TextOut(bx1 + 12, barY + 48, "MACRO BENCHMARK | VOL RISK: LOW", colAccentBlue);
+         }
+      }
+
+      // Fast in-memory bitmap flip (no flickering, no redraw loops)
+      m_canvas.Update();
+   }
+};
+
+class CQuantAnalyticsEngine
+{
+public:
+   static void ResetAnalytics(InstrumentQuantAnalytics &out, string symbol, string baseName, int activeStratCount)
+   {
+      out.symbol = symbol;
+      out.baseName = baseName;
+      out.currentPrice = 0.0;
+      out.priceChange = 0.0;
+      out.priceChangePct = 0.0;
+      out.ema9_m5 = 0.0;
+      out.ema21_m5 = 0.0;
+      out.ema200_m5 = 0.0;
+      out.ema9_h1 = 0.0;
+      out.ema21_h1 = 0.0;
+      out.ema9_d1 = 0.0;
+      out.ema21_d1 = 0.0;
+      out.emaSeparationPct = 0.0;
+      out.emaHealthScore = 0.0;
+      out.m5EmaState = "NEUTRAL";
+      out.h1EmaState = "NEUTRAL";
+      out.d1EmaState = "NEUTRAL";
+      out.crossoverStatus = "NONE";
+      out.pullbackStatus = "NONE";
+      out.structureClass = "CONSOLIDATION";
+      out.bosStatus = "INTACT";
+      out.chochStatus = "NONE";
+      out.lastSwingHigh = 0.0;
+      out.lastSwingLow = 0.0;
+      out.regimeClassification = "INACTIVE";
+      out.smcZone = "EQUILIBRIUM";
+      out.fvgTop = 0.0;
+      out.fvgBottom = 0.0;
+      out.fvgStatus = "NONE";
+      out.obHigh = 0.0;
+      out.obLow = 0.0;
+      out.obStatus = "NONE";
+      out.nearestBSL = 0.0;
+      out.nearestSSL = 0.0;
+      out.prevDayHigh = 0.0;
+      out.prevDayLow = 0.0;
+      out.prevWeekHigh = 0.0;
+      out.prevWeekLow = 0.0;
+      out.lastSweepDirection = "NONE";
+      out.sweepConfirmation = "NONE";
+      out.bslDistancePoints = 0.0;
+      out.sslDistancePoints = 0.0;
+      out.currentTickVol = 0;
+      out.prevTickVol = 0;
+      out.avgTickVol = 0.0;
+      out.rvol = 1.0;
+      out.volExpansion = "NORMAL";
+      out.buyingPressurePct = 50.0;
+      out.atr14 = 0.0;
+      out.atrPoints = 0.0;
+      out.rsi14 = 50.0;
+      out.rsiCondition = "NEUTRAL";
+      out.macdMain = 0.0;
+      out.macdSignal = 0.0;
+      out.macdHist = 0.0;
+      out.macdMomentum = "NEUTRAL";
+      out.mtfD1 = "NEUTRAL";
+      out.mtfH1 = "NEUTRAL";
+      out.mtfM15 = "NEUTRAL";
+      out.mtfM5 = "NEUTRAL";
+      out.dxyRollingCorr = -0.75;
+      out.overallSignal = "STANDBY";
+      out.activeStrategyCount = activeStratCount;
+      out.signalConfidenceScore = 0.0;
+   }
+
+   static void ComputeInstrumentAnalytics(
+      string symbol,
+      string baseName,
+      int h_ema9_m5, int h_ema21_m5, int h_ema200_m5, int h_atr_m5, int h_rsi_m5,
+      int h_ema9_h1, int h_ema21_h1,
+      int activeStratCount,
+      InstrumentQuantAnalytics &out
+   )
+   {
+      ResetAnalytics(out, symbol, baseName, activeStratCount);
+
+      if(symbol == "" || !SymbolInfoInteger(symbol, SYMBOL_SELECT))
+      {
+         out.m5EmaState = "UNRESOLVED";
+         out.regimeClassification = "NOT LOADED";
+         out.overallSignal = "OFFLINE";
+         return;
+      }
+
+      // 1. Current Canonical Price & Daily Change
+      double bid = 0.0, ask = 0.0;
+      SymbolInfoDouble(symbol, SYMBOL_BID, bid);
+      SymbolInfoDouble(symbol, SYMBOL_ASK, ask);
+      out.currentPrice = (bid > 0.0) ? bid : ask;
+
+      MqlRates d1Rates[];
+      ArraySetAsSeries(d1Rates, true);
+      if(CopyRates(symbol, PERIOD_D1, 0, 2, d1Rates) >= 2)
+      {
+         double prevClose = d1Rates[1].close;
+         if(prevClose > 0.0)
+         {
+            out.priceChange = out.currentPrice - prevClose;
+            out.priceChangePct = (out.priceChange / prevClose) * 100.0;
+         }
+      }
+
+      // 2. EMA Indicator Buffers (M5)
+      double e9[], e21[], e200[], atrVal[], rsiVal[];
+      ArraySetAsSeries(e9, true); ArraySetAsSeries(e21, true); ArraySetAsSeries(e200, true);
+      ArraySetAsSeries(atrVal, true); ArraySetAsSeries(rsiVal, true);
+
+      bool emaReady = (CopyBuffer(h_ema9_m5, 0, 1, 2, e9) >= 2 &&
+                       CopyBuffer(h_ema21_m5, 0, 1, 2, e21) >= 2 &&
+                       CopyBuffer(h_ema200_m5, 0, 1, 2, e200) >= 2);
+
+      if(emaReady)
+      {
+         out.ema9_m5 = e9[0];
+         out.ema21_m5 = e21[0];
+         out.ema200_m5 = e200[0];
+
+         if(e9[0] > e21[0] && e21[0] > e200[0]) out.m5EmaState = "BULLISH";
+         else if(e9[0] < e21[0] && e21[0] < e200[0]) out.m5EmaState = "BEARISH";
+         else out.m5EmaState = "NEUTRAL (Chop)";
+
+         if(e9[1] <= e21[1] && e9[0] > e21[0]) out.crossoverStatus = "BULL CROSS";
+         else if(e9[1] >= e21[1] && e9[0] < e21[0]) out.crossoverStatus = "BEAR CROSS";
+         else out.crossoverStatus = "ALIGNED";
+
+         double spreadDist = MathAbs(e9[0] - e21[0]);
+         out.emaSeparationPct = (e21[0] > 0.0) ? ((spreadDist / e21[0]) * 100.0) : 0.0;
+
+         // EMA Health Score (0 - 100%)
+         double pt = SymbolInfoDouble(symbol, SYMBOL_POINT);
+         double slope = (pt > 0) ? (MathAbs(e9[0] - e9[1]) / pt) : 0.0;
+         out.emaHealthScore = MathMin(100.0, (slope * 2.5) + (out.emaSeparationPct * 500.0));
+      }
+
+      // 3. Higher Timeframe EMA (H1)
+      double h1_e9[], h1_e21[];
+      ArraySetAsSeries(h1_e9, true); ArraySetAsSeries(h1_e21, true);
+      if(CopyBuffer(h_ema9_h1, 0, 1, 2, h1_e9) >= 2 && CopyBuffer(h_ema21_h1, 0, 1, 2, h1_e21) >= 2)
+      {
+         out.ema9_h1 = h1_e9[0];
+         out.ema21_h1 = h1_e21[0];
+         out.h1EmaState = (h1_e9[0] > h1_e21[0]) ? "BULLISH" : "BEARISH";
+         out.mtfH1 = out.h1EmaState;
+      }
+
+      // 4. Multi-Timeframe M15 & D1 Trend Matrix
+      MqlRates m15Rates[], dailyRates[];
+      ArraySetAsSeries(m15Rates, true); ArraySetAsSeries(dailyRates, true);
+      if(CopyRates(symbol, PERIOD_M15, 0, 5, m15Rates) >= 5)
+      {
+         out.mtfM15 = (m15Rates[0].close > m15Rates[4].close) ? "BULLISH" : "BEARISH";
+      }
+      if(CopyRates(symbol, PERIOD_D1, 0, 5, dailyRates) >= 5)
+      {
+         out.mtfD1 = (dailyRates[0].close > dailyRates[4].close) ? "BULLISH" : "BEARISH";
+         out.d1EmaState = out.mtfD1;
+      }
+      out.mtfM5 = out.m5EmaState;
+
+      // 5. Technical Indicators: ATR & RSI
+      if(CopyBuffer(h_atr_m5, 0, 1, 1, atrVal) > 0)
+      {
+         out.atr14 = atrVal[0];
+         double pt = SymbolInfoDouble(symbol, SYMBOL_POINT);
+         out.atrPoints = (pt > 0) ? (atrVal[0] / pt) : 0;
+      }
+      if(CopyBuffer(h_rsi_m5, 0, 1, 1, rsiVal) > 0)
+      {
+         out.rsi14 = rsiVal[0];
+         if(out.rsi14 >= 70.0) out.rsiCondition = "OVERBOUGHT";
+         else if(out.rsi14 <= 30.0) out.rsiCondition = "OVERSOLD";
+         else out.rsiCondition = "NEUTRAL";
+      }
+
+      // 6. Market Structure, Swings, BOS, CHOCH, FVG & Order Block (M5)
+      MqlRates m5Rates[];
+      ArraySetAsSeries(m5Rates, true);
+      if(CopyRates(symbol, PERIOD_M5, 0, 40, m5Rates) >= 40)
+      {
+         double highest = m5Rates[1].high;
+         double lowest = m5Rates[1].low;
+         for(int b = 1; b <= 24; b++)
+         {
+            if(m5Rates[b].high > highest) highest = m5Rates[b].high;
+            if(m5Rates[b].low < lowest) lowest = m5Rates[b].low;
+         }
+         out.lastSwingHigh = highest;
+         out.lastSwingLow = lowest;
+         out.nearestBSL = highest;
+         out.nearestSSL = lowest;
+
+         double pt = SymbolInfoDouble(symbol, SYMBOL_POINT);
+         out.bslDistancePoints = (pt > 0) ? (MathAbs(highest - out.currentPrice) / pt) : 0;
+         out.sslDistancePoints = (pt > 0) ? (MathAbs(out.currentPrice - lowest) / pt) : 0;
+
+         // Premium / Discount / Equilibrium Zone
+         double swingRange = highest - lowest;
+         if(swingRange > 0.0)
+         {
+            double eq = lowest + (swingRange * 0.50);
+            if(out.currentPrice > eq + (swingRange * 0.05))
+               out.smcZone = "PREMIUM (Sell Zone)";
+            else if(out.currentPrice < eq - (swingRange * 0.05))
+               out.smcZone = "DISCOUNT (Buy Zone)";
+            else
+               out.smcZone = "EQUILIBRIUM (50%)";
+         }
+
+         // Candle-Close Break of Structure (BOS) & Change of Character (CHOCH)
+         if(m5Rates[1].close > highest)
+         {
+            out.bosStatus = "BULLISH BOS";
+            out.structureClass = "HH (Higher High)";
+         }
+         else if(m5Rates[1].close < lowest)
+         {
+            out.bosStatus = "BEARISH BOS";
+            out.structureClass = "LL (Lower Low)";
+         }
+         else
+         {
+            out.bosStatus = "INTACT";
+            out.structureClass = (out.m5EmaState == "BULLISH" ? "HL (Higher Low)" : "LH (Lower High)");
+         }
+
+         // Liquidity Sweep Detection (Wick through swing, close inside)
+         if(m5Rates[1].high > highest && m5Rates[1].close < highest)
+         {
+            out.lastSweepDirection = "BEAR SWEEP (BSL Taken)";
+            out.sweepConfirmation = "CONFIRMED";
+            out.chochStatus = "POTENTIAL CHOCH";
+         }
+         else if(m5Rates[1].low < lowest && m5Rates[1].close > lowest)
+         {
+            out.lastSweepDirection = "BULL SWEEP (SSL Taken)";
+            out.sweepConfirmation = "CONFIRMED";
+            out.chochStatus = "POTENTIAL CHOCH";
+         }
+         else
+         {
+            out.lastSweepDirection = "NONE";
+            out.sweepConfirmation = "UNCONFIRMED";
+            out.chochStatus = "NONE";
+         }
+
+         // 3-Candle Fair Value Gap (FVG) Detection
+         if(m5Rates[1].low > m5Rates[3].high)
+         {
+            out.fvgStatus = "BULLISH FVG";
+            out.fvgTop = m5Rates[1].low;
+            out.fvgBottom = m5Rates[3].high;
+         }
+         else if(m5Rates[1].high < m5Rates[3].low)
+         {
+            out.fvgStatus = "BEARISH FVG";
+            out.fvgTop = m5Rates[3].low;
+            out.fvgBottom = m5Rates[1].high;
+         }
+         else
+         {
+            out.fvgStatus = "NONE";
+            out.fvgTop = 0.0;
+            out.fvgBottom = 0.0;
+         }
+
+         // Order Block (OB) Identification
+         for(int ob = 2; ob <= 6; ob++)
+         {
+            if(m5Rates[ob-1].close > m5Rates[ob-1].open && (m5Rates[ob-1].close - m5Rates[ob-1].open) > (out.atr14 * 0.8))
+            {
+               if(m5Rates[ob].close < m5Rates[ob].open)
+               {
+                  out.obStatus = "BULLISH OB";
+                  out.obHigh = m5Rates[ob].high;
+                  out.obLow = m5Rates[ob].low;
+                  break;
+               }
+            }
+            else if(m5Rates[ob-1].close < m5Rates[ob-1].open && (m5Rates[ob-1].open - m5Rates[ob-1].close) > (out.atr14 * 0.8))
+            {
+               if(m5Rates[ob].close > m5Rates[ob].open)
+               {
+                  out.obStatus = "BEARISH OB";
+                  out.obHigh = m5Rates[ob].high;
+                  out.obLow = m5Rates[ob].low;
+                  break;
+               }
+            }
+         }
+
+         // 7. Tick Volume & Relative Volume (RVOL)
+         out.currentTickVol = m5Rates[0].tick_volume;
+         out.prevTickVol = m5Rates[1].tick_volume;
+         long volSum = 0;
+         for(int v = 1; v <= 20; v++) volSum += m5Rates[v].tick_volume;
+         out.avgTickVol = (double)volSum / 20.0;
+         out.rvol = (out.avgTickVol > 0.0) ? ((double)out.prevTickVol / out.avgTickVol) : 1.0;
+
+         if(out.rvol >= 1.5) out.volExpansion = "EXPANSION (High)";
+         else if(out.rvol <= 0.7) out.volExpansion = "CONTRACTION (Low)";
+         else out.volExpansion = "NORMAL";
+
+         // Buying vs Selling Pressure proxy
+         double candleRange = m5Rates[1].high - m5Rates[1].low;
+         if(candleRange > 0.0)
+         {
+            out.buyingPressurePct = ((m5Rates[1].close - m5Rates[1].low) / candleRange) * 100.0;
+         }
+         else out.buyingPressurePct = 50.0;
+      }
+
+      // 8. Higher-Timeframe Liquidity Anchors (PDH, PDL)
+      if(CopyRates(symbol, PERIOD_D1, 0, 3, dailyRates) >= 3)
+      {
+         out.prevDayHigh = dailyRates[1].high;
+         out.prevDayLow = dailyRates[1].low;
+      }
+
+      // 9. Market Regime Classification
+      if(out.m5EmaState == "BULLISH" && out.h1EmaState == "BULLISH")
+      {
+         out.regimeClassification = (out.rvol > 1.2 ? "STRONG BULL TREND" : "BULL TREND");
+      }
+      else if(out.m5EmaState == "BEARISH" && out.h1EmaState == "BEARISH")
+      {
+         out.regimeClassification = (out.rvol > 1.2 ? "STRONG BEAR TREND" : "BEAR TREND");
+      }
+      else
+      {
+         out.regimeClassification = "CONSOLIDATION / CHOP";
+      }
+
+      // 10. Overall Signal Confirmation Matrix
+      if(out.m5EmaState == "BULLISH" && out.h1EmaState == "BULLISH" && out.rsi14 < 68.0)
+      {
+         out.overallSignal = "BUY SETUP";
+         out.signalConfidenceScore = 85.0;
+      }
+      else if(out.m5EmaState == "BEARISH" && out.h1EmaState == "BEARISH" && out.rsi14 > 32.0)
+      {
+         out.overallSignal = "SELL SETUP";
+         out.signalConfidenceScore = 85.0;
+      }
+      else
+      {
+         out.overallSignal = "WAIT (Neutral)";
+         out.signalConfidenceScore = 40.0;
+      }
+   }
+};
 //| Section 2: Input Parameters                                      |
 //+------------------------------------------------------------------+
 input group "=== [00] MASTER PORTFOLIO RISK & ENGINE GUARDS ==="
@@ -1802,6 +2733,8 @@ void ManageExistingPositions()
 }
 
 //+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
 //| Section 10: On-Chart Dashboard Renderer                          |
 //+------------------------------------------------------------------+
 void RenderDashboard()
@@ -1860,8 +2793,6 @@ void RenderDashboard()
       quantData
    );
 }
-
-//+------------------------------------------------------------------+
 //| Section 11: Core Event Handlers                                  |
 //+------------------------------------------------------------------+
 int OnInit()

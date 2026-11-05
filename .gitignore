@@ -49,3 +49,7 @@ Desktop.ini
 Research_Lab/
 *.csv
 
+
+Archive/
+__pycache__/
+*.pyc
