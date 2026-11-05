@@ -1,0 +1,73 @@
+﻿{
+    "GeneratedAtUtc":  "2026-11-05T19:37:12Z",
+    "Hardware":  {
+                     "MachineModel":  "HP Pavilion x360 2-in-1 Laptop 14-ek1xxx",
+                     "CPU":  "13th Gen Intel(R) Core(TM) i7-1355U (10 Cores, 12 Threads)",
+                     "TotalRAM_GB":  15.72,
+                     "DiskTotal_GB":  952.53,
+                     "DiskFree_GB":  781.98,
+                     "OS":  "Microsoft Windows 11 Home (Build 26300)"
+                 },
+    "Terminal":  {
+                     "TerminalBinary":  "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+                     "TerminalBuild":  6230,
+                     "MetaEditorBinary":  "C:\\Program Files\\MetaTrader 5\\metaeditor64.exe",
+                     "DataDirectory":  "C:\\Users\\vaibh\\AppData\\Roaming\\MetaQuotes\\Terminal\\D0E8209F77C8CF37AD8BF550E51FF075",
+                     "Broker":  "Exness Technologies Ltd",
+                     "Server":  "Exness-MT5Trial8",
+                     "TradeMode":  "Demo",
+                     "Connected":  true,
+                     "TradeAllowed":  true
+                 },
+    "TargetSymbols":  [
+                          {
+                              "Digits":  3,
+                              "ContractSize":  100,
+                              "VolumeStep":  0.01,
+                              "MinLot":  0.01,
+                              "Symbol":  "XAUUSD",
+                              "MaxLot":  200,
+                              "Spread":  40
+                          },
+                          {
+                              "Digits":  3,
+                              "ContractSize":  5000,
+                              "VolumeStep":  0.01,
+                              "MinLot":  0.01,
+                              "Symbol":  "XAGUSD",
+                              "MaxLot":  200,
+                              "Spread":  0
+                          },
+                          {
+                              "Digits":  2,
+                              "ContractSize":  1,
+                              "VolumeStep":  0.01,
+                              "MinLot":  0.14,
+                              "Symbol":  "US500",
+                              "MaxLot":  1000,
+                              "Spread":  0
+                          },
+                          {
+                              "Digits":  2,
+                              "ContractSize":  1,
+                              "VolumeStep":  0.01,
+                              "MinLot":  0.05,
+                              "Symbol":  "USTEC",
+                              "MaxLot":  500,
+                              "Spread":  0
+                          }
+                      ],
+    "PythonEnvironment":  {
+                              "PythonVersion":  "3.12",
+                              "MetaTrader5":  "5.0.6231",
+                              "pandas":  "3.1.1",
+                              "numpy":  "2.5.4",
+                              "scipy":  "1.18.1",
+                              "yfinance":  "1.8.0",
+                              "matplotlib":  "3.11.2",
+                              "ta":  "0.11.0"
+                          },
+    "EAsInstalled":  30,
+    "UnifiedSystemCompiled":  true,
+    "CleanWorkingTree":  true
+}
