@@ -71,7 +71,7 @@ input bool     InpEnableRolloverBlackout    = true;    // Rollover Blackout (21:
 
 input group "=== [02] ON-CHART DASHBOARD ==="
 input bool     InpShowDashboard             = true;    // Display Live On-Chart Dashboard
-input int      InpDashboardRefreshMs        = 1000;    // Dashboard Redraw Throttling (ms)
+input int      InpDashboardRefreshMs        = 2500;    // Dashboard Redraw Throttling (ms)
 
 input group "=== [03] INSTRUMENT 0: XAUUSD (GOLD) CONFIGURATION ==="
 input bool     InpXAU_EnableSymbol          = true;    // Enable Scanning on Gold
@@ -1818,88 +1818,9 @@ void RenderDashboard()
    string sessionReject = "";
    bool isSession = IsSessionAllowed(sessionReject);
 
-   string text = "";
-   text += "========================================================================================\n";
-   text += "                      HR UNIFIED MULTI-STRATEGY TRADING SYSTEM (v1.00)                 \n";
-   text += "========================================================================================\n";
-   text += StringFormat(" Server Time: %s | UK Time: %s | Session: %s\n",
-                        TimeToString(serverTime, TIME_MINUTES|TIME_SECONDS),
-                        TimeToString(ukTime, TIME_MINUTES|TIME_SECONDS),
-                        (isSession ? "ACTIVE ðŸŸ¢" : StringFormat("INACTIVE ðŸ”´ (%s)", sessionReject)));
-   text += StringFormat(" Master Switch: %s | Mode: DEMO RESEARCH | Daily Drawdown: %.2f%% / %.1f%%\n",
-                        (InpMasterTradingEnable ? "ON ðŸŸ¢" : "OFF ðŸ”´"),
-                        m_riskState.currentDailyDDPercent, InpMaxDailyDrawdownPercent);
-   text += StringFormat(" Portfolio Open Risk: %.2f%% / %.1f%% | Total Positions: %d / %d\n",
-                        m_riskState.currentPortfolioOpenRiskPercent, InpMaxPortfolioRiskPercent,
-                        m_riskState.totalOpenPositions, InpMaxTotalOpenPositions);
-   text += StringFormat(" Consecutive Losses Today: %d / %d | Cooldown: %s\n",
-                        m_riskState.currentConsecutiveLosses, InpConsecutiveLossLimit,
-                        (m_riskState.isCooldownActive ? "ACTIVE â³" : "NONE ðŸŸ¢"));
-   text += "----------------------------------------------------------------------------------------\n";
-   text += " ASSET      | BROKER MAPPING | SPREAD (PTS) | STATUS       | ACTIVE STRATEGIES | LAST SIGNAL\n";
-   text += "----------------------------------------------------------------------------------------\n";
+   // Clear legacy comment to stop flicker
+   Comment("");
 
-   for(int i = 0; i < NUM_INSTRUMENTS; i++)
-   {
-      string sym = m_instruments[i].resolvedSymbol;
-      string spreadStr = "--";
-      if(m_instruments[i].isResolved)
-      {
-         spreadStr = IntegerToString(SymbolInfoInteger(sym, SYMBOL_SPREAD));
-      }
-
-      int activeCount = 0;
-      for(int s = 0; s < NUM_STRATEGIES; s++)
-      {
-         if(m_instruments[i].strategies[s].enabled) activeCount++;
-      }
-
-      string statusStr = "OFF âšª";
-      if(m_instruments[i].isResolved)
-      {
-         statusStr = (activeCount > 0) ? "READY ðŸŸ¢" : "STANDBY ðŸŸ¡";
-      }
-      else if(m_instruments[i].baseName != "")
-      {
-         statusStr = "NOT FOUND ðŸ”´";
-      }
-
-      text += StringFormat(" %-10s | %-14s | %-12s | %-12s | %2d / 8 Active   | %-16s\n",
-                           m_instruments[i].baseName,
-                           (m_instruments[i].isResolved ? sym : "UNRESOLVED"),
-                           spreadStr,
-                           statusStr,
-                           activeCount,
-                           m_instruments[i].lastSignalState);
-   }
-
-   text += "----------------------------------------------------------------------------------------\n";
-   text += " [ACTIVE POSITIONS AUDIT]\n";
-
-   CPositionInfo pos;
-   int eaPosCount = 0;
-   for(int p = PositionsTotal() - 1; p >= 0; p--)
-   {
-      if(pos.SelectByIndex(p))
-      {
-         ulong magic = pos.Magic();
-         if(magic >= InpMasterMagicBase && magic < (InpMasterMagicBase + 100))
-         {
-            eaPosCount++;
-            text += StringFormat(" â€¢ #%I64u | %s | %s %.2f lots @ %.5f | SL: %.5f | Profit: $%.2f\n",
-                                 pos.Ticket(), pos.Symbol(),
-                                 (pos.PositionType() == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-                                 pos.Volume(), pos.PriceOpen(), pos.StopLoss(), pos.Profit());
-         }
-      }
-   }
-   if(eaPosCount == 0)
-   {
-      text += " No active positions managed by HR Unified EA.\n";
-   }
-
-   text += "========================================================================================\n";
-   Comment(text);
    // --- Render Full-Screen Bloomberg Master Terminal ---
    double dxyBid = 0.0;
    SymbolInfoDouble("DXY", SYMBOL_BID, dxyBid);
