@@ -15,6 +15,7 @@
 #include <Trade\AccountInfo.mqh>
 #include <Trade\OrderInfo.mqh>
 #include <BloombergDashboard.mqh>
+#include <QuantAnalyticsEngine.mqh>
 
 //====================================================================
 // SECTION 1: GLOBAL CONSTANTS & ENUMERATIONS
@@ -1900,95 +1901,42 @@ void RenderDashboard()
    text += "========================================================================================\n";
    Comment(text);
    // --- Render Full-Screen Bloomberg Master Terminal ---
-   string bSymbols[4];
-   string bBaseNames[4];
-   double bBids[4];
-   double bAsks[4];
-   int    bSpreads[4];
-   string bM5Trends[4];
-   string bH1Trends[4];
-   double bEMAHealths[4];
-   double bATRs[4];
-   double bSupports[4];
-   double bResists[4];
-   double bDxyCorrs[4];
-   string bActiveCounts[4];
-   string bLastSigs[4];
-
    double dxyBid = 0.0;
    SymbolInfoDouble("DXY", SYMBOL_BID, dxyBid);
    if(dxyBid <= 0.0) dxyBid = 101.567;
+   double dxyChange = -0.18;
 
-   for(int k = 0; k < 4; k++)
+   InstrumentQuantAnalytics quantData[NUM_INSTRUMENTS];
+   for(int k = 0; k < NUM_INSTRUMENTS; k++)
    {
-      bSymbols[k] = m_instruments[k].resolvedSymbol;
-      bBaseNames[k] = m_instruments[k].baseName;
-      bBids[k] = 0.0;
-      bAsks[k] = 0.0;
-      bSpreads[k] = 0;
-      bM5Trends[k] = "NEUTRAL";
-      bH1Trends[k] = "NEUTRAL";
-      bEMAHealths[k] = 72.5;
-      bATRs[k] = 0.0;
-      bSupports[k] = 0.0;
-      bResists[k] = 0.0;
-      bDxyCorrs[k] = (k == 0 ? -0.88 : (k == 1 ? -0.82 : (k == 2 ? -0.79 : -0.74)));
-      bActiveCounts[k] = "3 / 8 Active";
-      bLastSigs[k] = m_instruments[k].lastSignalState;
-
-      if(m_instruments[k].isResolved)
+      int actCount = 0;
+      for(int st = 0; st < NUM_STRATEGIES; st++)
       {
-         string sym = m_instruments[k].resolvedSymbol;
-         SymbolInfoDouble(sym, SYMBOL_BID, bBids[k]);
-         SymbolInfoDouble(sym, SYMBOL_ASK, bAsks[k]);
-         bSpreads[k] = (int)SymbolInfoInteger(sym, SYMBOL_SPREAD);
-
-         double ema9[], ema21[], ema200[], atrVal[];
-         ArraySetAsSeries(ema9, true); ArraySetAsSeries(ema21, true); ArraySetAsSeries(ema200, true); ArraySetAsSeries(atrVal, true);
-
-         if(CopyBuffer(m_instruments[k].h_ema9, 0, 1, 1, ema9) > 0 &&
-            CopyBuffer(m_instruments[k].h_ema21, 0, 1, 1, ema21) > 0 &&
-            CopyBuffer(m_instruments[k].h_ema200, 0, 1, 1, ema200) > 0)
-         {
-            if(ema9[0] > ema21[0] && ema21[0] > ema200[0]) bM5Trends[k] = "BULLISH";
-            else if(ema9[0] < ema21[0] && ema21[0] < ema200[0]) bM5Trends[k] = "BEARISH";
-            else bM5Trends[k] = "NEUTRAL";
-         }
-
-         double h1_9[], h1_21[];
-         ArraySetAsSeries(h1_9, true); ArraySetAsSeries(h1_21, true);
-         if(CopyBuffer(m_instruments[k].h_htf_ema9, 0, 1, 1, h1_9) > 0 &&
-            CopyBuffer(m_instruments[k].h_htf_ema21, 0, 1, 1, h1_21) > 0)
-         {
-            if(h1_9[0] > h1_21[0]) bH1Trends[k] = "BULLISH";
-            else if(h1_9[0] < h1_21[0]) bH1Trends[k] = "BEARISH";
-         }
-
-         if(CopyBuffer(m_instruments[k].h_atr, 0, 1, 1, atrVal) > 0)
-         {
-            bATRs[k] = atrVal[0];
-            bSupports[k] = bBids[k] - (1.5 * atrVal[0]);
-            bResists[k]  = bBids[k] + (1.5 * atrVal[0]);
-         }
-
-         int actCount = 0;
-         for(int st = 0; st < NUM_STRATEGIES; st++)
-         {
-            if(m_instruments[k].strategies[st].enabled) actCount++;
-         }
-         bActiveCounts[k] = StringFormat("%d / 8 Active", actCount);
+         if(m_instruments[k].strategies[st].enabled) actCount++;
       }
+
+      CQuantAnalyticsEngine::ComputeInstrumentAnalytics(
+         m_instruments[k].resolvedSymbol,
+         m_instruments[k].baseName,
+         m_instruments[k].h_ema9,
+         m_instruments[k].h_ema21,
+         m_instruments[k].h_ema200,
+         m_instruments[k].h_atr,
+         m_instruments[k].h_rsi,
+         m_instruments[k].h_htf_ema9,
+         m_instruments[k].h_htf_ema21,
+         actCount,
+         quantData[k]
+      );
    }
 
-   m_bloombergTerm.Render(
+   m_bloombergTerm.RenderTerminal(
       serverTime, ukTime, (isSession ? "ACTIVE" : "INACTIVE"),
       m_riskState.currentDailyDDPercent, InpMaxDailyDrawdownPercent,
       m_riskState.currentPortfolioOpenRiskPercent, InpMaxPortfolioRiskPercent,
       m_riskState.totalOpenPositions, InpMaxTotalOpenPositions,
-      dxyBid, -0.18,
-      bSymbols, bBaseNames, bBids, bAsks, bSpreads,
-      bM5Trends, bH1Trends, bEMAHealths, bATRs, bSupports, bResists, bDxyCorrs,
-      bActiveCounts, bLastSigs
+      dxyBid, dxyChange,
+      quantData
    );
 }
 
@@ -2008,6 +1956,23 @@ int OnInit()
    SyncConsecutiveLosses();
 
    EventSetMillisecondTimer(InpDashboardRefreshMs);
+
+   // Hide underlying chart background elements for full-screen Bloomberg Terminal
+   if(InpShowDashboard && !m_isTester)
+   {
+      ChartSetInteger(0, CHART_SHOW_PRICE_SCALE, false);
+      ChartSetInteger(0, CHART_SHOW_DATE_SCALE, false);
+      ChartSetInteger(0, CHART_SHOW_GRID, false);
+      ChartSetInteger(0, CHART_SHOW_TICKER, false);
+      ChartSetInteger(0, CHART_COLOR_BACKGROUND, clrWhite);
+      ChartSetInteger(0, CHART_COLOR_FOREGROUND, clrWhite);
+      ChartSetInteger(0, CHART_COLOR_CHART_LINE, clrWhite);
+      ChartSetInteger(0, CHART_COLOR_CANDLE_BULL, clrWhite);
+      ChartSetInteger(0, CHART_COLOR_CANDLE_BEAR, clrWhite);
+      ChartSetInteger(0, CHART_COLOR_CHART_UP, clrWhite);
+      ChartSetInteger(0, CHART_COLOR_CHART_DOWN, clrWhite);
+      ChartRedraw(0);
+   }
 
    PrintFormat("[HR_UNIFIED] Initialization Complete. Ready to scan 4 instruments across 8 strategy modules.");
    return(INIT_SUCCEEDED);
