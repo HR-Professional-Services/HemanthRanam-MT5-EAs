@@ -1,0 +1,63 @@
+﻿; 921 EMA Multi-Pair Scanner V1 - Authoritative Recommended Model
+; Gold (XAUUSD), Silver (XAGUSD), S&P 500 (US500), Nasdaq 100 (USTEC)
+; Timeframe: M5 Execution with H1 Trend Alignment
+; Trade Management: Standard 1:1 BE, 50% at 1:2, Final TP at 1:3
+InpAutoTradingEnabled=true
+InpTradeManagementMode=0
+InpTargetRR=3.0
+InpPartialCloseRR=2.0
+InpPartialClosePercent=50.0
+InpRiskPercent=1.0
+InpMagicNumber=921001
+
+; Quantitative Filters
+Use_EMA_Health_Filter=true
+EMA_Health_Lookback=10
+EMA_Health_Min_Separation_ATR=0.15
+EMA_Health_Min_Slope=25.0
+EMA_Health_Max_Crosses=1
+Require_Closed_Confirmation_Candle=true
+Require_Engulfing=true
+Use_Volume_Filter=true
+Volume_Lookback=20
+Volume_Min_Multiplier=1.00
+
+; Break-Even Protection (Anti-Wick Noise Gate)
+Use_BreakEven=true
+BreakEven_R=1.0
+InpBEConfirmationMode=1
+InpBESpreadMultiplier=1.5
+InpBERiskDistancePct=0.05
+InpEnforceMinRiskFloors=true
+
+; Telegram Alerts & Mobile Push
+Telegram_Mobile_Mode=true
+Telegram_Send_NoTrade_Diagnostics=false
+Telegram_Send_Hourly_Report=true
+Telegram_Send_Opening_Report=true
+Telegram_Send_Closing_Report=true
+InpEnableTerminalAlert=true
+InpEnableSoundAlert=true
+InpEnablePushAlert=true
+InpEnableTelegram=true
+InpTelegramBotToken=8977669207:AAH1nGIjVzAgIXuesNmtzZKAzF9garPWCno
+InpTelegramChatID=-1004400312129
+
+; Four Multi-Pair Universe
+InpPair1=XAUUSD
+InpPair1Enabled=true
+InpPair2=XAGUSD
+InpPair2Enabled=true
+InpPair3=US500
+InpPair3Enabled=true
+InpPair4=USTEC
+InpPair4Enabled=true
+
+; Time & Session Filters (UK GMT Alignment)
+InpBrokerUTCOffset=2
+InpTradingSession=0
+InpUseTimeFilter=true
+InpStartHour=7
+InpStartMinute=0
+InpEndHour=22
+InpEndMinute=0
