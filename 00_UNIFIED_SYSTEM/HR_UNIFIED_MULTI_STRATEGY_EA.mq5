@@ -1072,15 +1072,15 @@ input bool     InpXAU_Enable_VolBreakout    = true;    // Gold: Enable Volatilit
 input bool     InpXAU_Enable_StructMomentum = true;    // Gold: Enable Market Structure Momentum
 
 input group "=== [04] INSTRUMENT 1: XAGUSD (SILVER) CONFIGURATION ==="
-input bool     InpXAG_EnableSymbol          = false;   // Enable Scanning on Silver (Default OFF per Phase 11 Audit)
+input bool     InpXAG_EnableSymbol          = true;   // Enable Scanning on Silver (Default OFF per Phase 11 Audit)
 input string   InpXAG_CustomSymbol          = "XAGUSD"; // Custom Symbol Name / Alias
 input int      InpXAG_MaxSpreadPoints       = 80;      // Max Spread Points
 input int      InpXAG_MaxSLPoints           = 1200;    // Max SL Distance Ceiling (Points)
-input bool     InpXAG_Enable_9EMA           = false;   // Silver: Enable 9 EMA Scalper (Default OFF - Persistent Losses)
+input bool     InpXAG_Enable_9EMA           = true;   // Silver: Enable 9 EMA Scalper (Default OFF - Persistent Losses)
 input bool     InpXAG_Enable_21EMA          = false;   // Silver: Enable 21 EMA Scalper (Default OFF - Severe Churn)
 input bool     InpXAG_Enable_50EMA          = false;   // Silver: Enable 50 EMA Scalper (Default OFF - High Friction)
 input bool     InpXAG_Enable_100EMA         = false;   // Silver: Enable 100 EMA Scalper (Default OFF - Range Loss)
-input bool     InpXAG_Enable_LiqSweep       = false;   // Silver: Enable Liquidity Sweep Reversal (Opt-in only)
+input bool     InpXAG_Enable_LiqSweep       = true;   // Silver: Enable Liquidity Sweep Reversal (Opt-in only)
 input bool     InpXAG_Enable_TrendPullback  = false;   // Silver: Enable Trend Pullback Continuation (Opt-in only)
 input bool     InpXAG_Enable_VolBreakout    = false;   // Silver: Enable Volatility Expansion Breakout (Opt-in only)
 input bool     InpXAG_Enable_StructMomentum = false;   // Silver: Enable Market Structure Momentum (Opt-in only)
