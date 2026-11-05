@@ -136,17 +136,18 @@ input bool     InpEnableTrendRunner         = true;      // Enable Unlimited Tre
 input bool     InpExitRunnerOnEMACross      = true;      // Close Runner Position On Confirmed Opposite EMA Cross
 
 input group "=== Execution Timeframes & Session Hours (UK Time) ==="
-input bool     InpEnableM5Execution   = true;      // Enable 5M Execution Layer (08:00-22:00 UK)
-input int      InpM5StartHour         = 8;         // 5M Session Start Hour (UK Time)
-input int      InpM5EndHour           = 22;        // 5M Session End Hour (UK Time)
-input bool     InpEnableM1Execution   = false;     // Enable 1M Execution Layer (13:00-17:00 UK Overlap)
-input int      InpM1StartHour         = 13;        // 1M Session Start Hour (UK Time: London-NY Overlap)
-input int      InpM1EndHour           = 17;        // 1M Session End Hour (UK Time: London-NY Overlap)
+input bool     InpEnableSessionFilter = false;     // Enable Session Time Filter (Default FALSE: 24/7 Scanning & Alerts)
+input bool     InpEnableM5Execution   = true;      // Enable 5M Execution Layer
+input int      InpM5StartHour         = 8;         // 5M Session Start Hour (UK Time, when Filter=true)
+input int      InpM5EndHour           = 22;        // 5M Session End Hour (UK Time, when Filter=true)
+input bool     InpEnableM1Execution   = false;     // Enable 1M Execution Layer
+input int      InpM1StartHour         = 13;        // 1M Session Start Hour (UK Time: London-NY Overlap, when Filter=true)
+input int      InpM1EndHour           = 17;        // 1M Session End Hour (UK Time: London-NY Overlap, when Filter=true)
 
 input group "=== Session Protection & Weekend Close ==="
-input bool     InpEnableNYCloseProtection   = true; // Enable New York Session Close Protection
+input bool     InpEnableNYCloseProtection   = false; // Enable New York Session Close Protection (Default FALSE for 24/7)
 input int      InpNYCloseCutoffMinutes      = 30;   // Cutoff Minutes Before Session End (Force Close)
-input bool     InpEnableFridayClose        = true; // Enable Friday Weekend Close Protection
+input bool     InpEnableFridayClose        = false; // Enable Friday Weekend Close Protection (Default FALSE for 24/7)
 input int      InpFridayCloseHour           = 21;   // Friday Close Hour (UK Time)
 input int      InpFridayCloseMin            = 30;   // Friday Close Minute (UK Time)
 input int      InpMondayStartHour           = 8;    // Monday Session Start Hour (UK Time)
@@ -694,15 +695,14 @@ int OnInit() {
       "📡 %d Symbols | ⚡ %s\n"
       "📊 M5 9/21 EMA Pullback Engine | Re-Entries: %s\n"
       "💰 Risk: %.1f%% (Re-Entry: %.1f%%) | 🎯 TP1: 2R → 50%% → Runner\n"
-      "⏱️ M5 %02d:00–%02d:00 | M1 %02d:00–%02d:00 UK\n"
+      "⏱️ Execution: %s\n"
       "🛡️ EMA200 Filter: %s | H1 Filter: %s\n\n"
       "📋 <b>Active Symbols (%d):</b>\n%s\n"
       "━━━━━━━━━━━━━━━━━━",
       m_totalSymbols, modeStr,
       (InpEnableReEntry ? StringFormat("Max %d", InpMaxReEntriesPerCycle) : "OFF"),
       InpRiskPercent, InpReEntryRiskPercent,
-      InpM5StartHour, InpM5EndHour,
-      InpM1StartHour, InpM1EndHour,
+      (InpEnableSessionFilter ? StringFormat("M5 %02d:00–%02d:00 | M1 %02d:00–%02d:00 UK", InpM5StartHour, InpM5EndHour, InpM1StartHour, InpM1EndHour) : "24/7 Scanning & Alerts (No Session Limits)"),
       (InpUseEMA200Filter ? "ON" : "OFF"),
       (InpUseH1TrendFilter ? "ON" : "OFF"),
       m_totalSymbols, symbolsList
@@ -928,6 +928,12 @@ datetime GetUKTime(datetime serverTime = 0) {
 }
 
 bool IsTimeframeSessionActive(ENUM_TIMEFRAMES tf, datetime serverTime) {
+   if(!InpEnableSessionFilter) {
+      if(tf == PERIOD_M5) return InpEnableM5Execution;
+      if(tf == PERIOD_M1) return InpEnableM1Execution;
+      return true;
+   }
+
    datetime ukTime = GetUKTime(serverTime);
    MqlDateTime dt;
    TimeToStruct(ukTime, dt);
@@ -2870,7 +2876,11 @@ bool SendTelegramMessage(string message) {
    ResetLastError();
    int res = WebRequest("POST", url, headers, 5000, data, result, resultHeaders);
    if(res != 200) {
-      Print("[TELEGRAM ERROR] SendMessage failed. HTTP Code: ", res, " | Error: ", GetLastError());
+      int err = GetLastError();
+      Print("[TELEGRAM ERROR] SendMessage failed. HTTP Code: ", res, " | Error: ", err);
+      if(err == 4014) {
+         Print("[TELEGRAM CRITICAL] WebRequest Error 4014 (Function Not Allowed): Ensure 'Allow WebRequest for listed URL' is checked in MT5 Tools -> Options -> Expert Advisors, with 'https://api.telegram.org' added to the whitelist!");
+      }
    }
    return (res == 200);
 }
@@ -2896,10 +2906,10 @@ void SendSignalTelegramAlert(const RealPositionMeta &vt, const SignalQuality &qu
    // Re-Entry Template (Mobile-First)
    if(vt.isReEntry) {
       string reMsg = StringFormat(
-         "🔁 <b>RE-ENTRY %s — %s</b>\n\n"
+         "🔁 <b>RE-ENTRY %s %s — Lot: %.2f</b>\n\n"
          "Entry: <code>%s</code>\n"
          "SL: <code>%s</code>\n"
-         "Risk: %.1f%% | Lot: %.2f\n\n"
+         "Risk: %.1f%%\n\n"
          "📊 M5: EMA Retest + Pinbar\n"
          "📈 H1: BOS Confirmed\n"
          "📦 Volume: Confirmed\n"
@@ -2907,15 +2917,15 @@ void SendSignalTelegramAlert(const RealPositionMeta &vt, const SignalQuality &qu
          "Score: %s | %d/100\n\n"
          "⏰ %s\n\n"
          "921 EMA V1",
-         dirStr, vt.symbol,
+         dirStr, vt.symbol, vt.initialLot,
          DoubleToString(vt.entry, digits),
          DoubleToString(vt.sl, digits),
-         InpReEntryRiskPercent, vt.initialLot,
+         InpReEntryRiskPercent,
          vt.qualityLabel, vt.qualityScore,
          entryTimeStr
       );
 
-      DispatchTerminalAlert(StringFormat("921 EMA RE-ENTRY %s %s @ %s", dirStr, vt.symbol, DoubleToString(vt.entry, digits)));
+      DispatchTerminalAlert(StringFormat("921 EMA RE-ENTRY %s %s — Lot: %.2f @ %s", dirStr, vt.symbol, vt.initialLot, DoubleToString(vt.entry, digits)));
 
       // Single-event delivery: Chart Image with Alert as Photo Caption
       if(InpSendSignalChart) {
@@ -2933,10 +2943,10 @@ void SendSignalTelegramAlert(const RealPositionMeta &vt, const SignalQuality &qu
    string m5Desc = (vt.type == ORDER_TYPE_BUY ? "Bull Engulfing + EMA Retest" : "Bear Engulfing + EMA Retest");
 
    string msg = StringFormat(
-      "%s <b>%s %s</b>\n\n"
+      "%s <b>%s %s — Lot: %.2f</b>\n\n"
       "Entry: <code>%s</code>\n"
       "SL: <code>%s</code>\n"
-      "Risk: %.1f%% | Lot: %.2f\n"
+      "Risk: %.1f%%\n"
       "Score: %s %d/100\n\n"
       "📊 M5: %s\n"
       "📈 H1: %s\n"
@@ -2944,10 +2954,10 @@ void SendSignalTelegramAlert(const RealPositionMeta &vt, const SignalQuality &qu
       "💵 DXY: %+.2f\n\n"
       "⏰ %s\n\n"
       "921 EMA V1",
-      headerEmoji, dirStr, vt.symbol,
+      headerEmoji, dirStr, vt.symbol, vt.initialLot,
       DoubleToString(vt.entry, digits),
       DoubleToString(vt.sl, digits),
-      riskPct, vt.initialLot,
+      riskPct,
       vt.qualityLabel, vt.qualityScore,
       m5Desc,
       h1Desc,
@@ -2956,7 +2966,7 @@ void SendSignalTelegramAlert(const RealPositionMeta &vt, const SignalQuality &qu
       entryTimeStr
    );
 
-   DispatchTerminalAlert(StringFormat("921 EMA %s %s @ %s | SL: %s", dirStr, vt.symbol, DoubleToString(vt.entry, digits), DoubleToString(vt.sl, digits)));
+   DispatchTerminalAlert(StringFormat("921 EMA %s %s — Lot: %.2f @ %s | SL: %s", dirStr, vt.symbol, vt.initialLot, DoubleToString(vt.entry, digits), DoubleToString(vt.sl, digits)));
 
    // Single-event delivery: Chart Image with Alert as Photo Caption
    if(InpSendSignalChart) {
