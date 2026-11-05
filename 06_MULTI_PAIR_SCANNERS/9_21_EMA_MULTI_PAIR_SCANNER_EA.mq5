@@ -20,9 +20,12 @@
 //====================================================================
 
 enum ENUM_TRADE_MANAGEMENT_MODE {
-   MODE_STANDARD_PARTIAL_2R    = 0,   // Standard Mode: 50% partial at 2R, BE, runner on opposite cross
-   MODE_TREND_RUNNER_CROSSOVER = 1    // Trend Runner Mode: 100% full position, BE at +1R, hold until opposite cross
+   MODE_STANDARD_1_2_PARTIAL_1_3_TP = 0,   // Standard: 1:1 BE, 1:2 (50% Partial), 1:3 Full TP (Recommended)
+   MODE_FIXED_1_3_TP                = 1,   // Fixed Target: 1:1 BE, 100% Full Exit at 1:3 TP (No Partials)
+   MODE_STANDARD_PARTIAL_2R_RUNNER  = 2,   // Partial Runner: 1:1 BE, 1:2 (50% Partial), Remainder Rides Cross
+   MODE_TREND_RUNNER_CROSSOVER      = 3    // Pure Trend Runner: 1:1 BE, 100% Full Position Rides Cross
 };
+#define MODE_STANDARD_PARTIAL_2R MODE_STANDARD_PARTIAL_2R_RUNNER
 
 enum ENUM_BE_CONFIRMATION_MODE {
    BE_CONFIRM_INTRABAR_TICK    = 0,   // Intrabar Tick Confirmation (Rapid R trigger)
@@ -31,9 +34,11 @@ enum ENUM_BE_CONFIRMATION_MODE {
 
 input group "=== Operation & Execution Mode ==="
 input bool                       InpAutoTradingEnabled        = true;      // Enable Live Auto Trading (False = Alerts Only)
-input ENUM_TRADE_MANAGEMENT_MODE InpTradeManagementMode       = MODE_TREND_RUNNER_CROSSOVER; // Active Trade Management Mode
+input ENUM_TRADE_MANAGEMENT_MODE InpTradeManagementMode       = MODE_STANDARD_1_2_PARTIAL_1_3_TP; // Active Trade Management Mode (Standard 1:1 BE, 1:2 50%, 1:3 TP)
+input double                     InpTargetRR                  = 3.0;       // Final Take Profit Target R-Multiple (Default: 3.0R)
+input double                     InpPartialCloseRR            = 2.0;       // Partial Close Trigger R-Multiple (Default: 2.0R)
+input double                     InpPartialClosePercent       = 50.0;      // TP1 Partial Profit Close % (Default: 50.0%)
 input double                     InpRiskPercent               = 1.0;       // Primary Trade Risk (% of Account Balance, Default: 1.0%)
-input double                     InpPartialClosePercent       = 50.0;      // TP1 2R Partial Profit Close % (Standard Mode: 50%)
 input ulong                      InpMagicNumber               = 921001;    // EA Magic Number
 
 input group "=== Quantitative EMA Health Filter (Anti-Chop) ==="
@@ -602,6 +607,17 @@ void SendIndividualTradeClosedAlert(const HistoricalTrade &ht);
 //+------------------------------------------------------------------+
 //| Expert Initialization Function                                   |
 //+------------------------------------------------------------------+
+
+string GetTradeManagementModeName(ENUM_TRADE_MANAGEMENT_MODE mode) {
+   switch(mode) {
+      case MODE_STANDARD_1_2_PARTIAL_1_3_TP: return "Standard (1:1 BE, 1:2 50%, 1:3 TP)";
+      case MODE_FIXED_1_3_TP:                return StringFormat("Fixed Target (1:1 BE, 1:%.1f TP)", InpTargetRR);
+      case MODE_STANDARD_PARTIAL_2R_RUNNER:  return "Partial Runner (1:1 BE, 1:2 50% -> Cross)";
+      case MODE_TREND_RUNNER_CROSSOVER:      return "Pure Trend Runner (1:1 BE -> Cross)";
+      default:                               return "Standard (1:1 BE, 1:2 50%, 1:3 TP)";
+   }
+}
+
 int OnInit() {
    Print("[921 EMA Multipair Scanner V1] Initializing Production EA Engine (Real MT5 Trade Tracking & Mobile Alerts)...");
 
@@ -2014,7 +2030,7 @@ void ProcessEMAPullbackForCycle(int idx, ENUM_TIMEFRAMES tf, SymbolCycleState &c
       SignalQuality q = CalculateQualityScore(idx, ORDER_TYPE_BUY, HTF_TREND_BULLISH, close[0], slPrice, risk, atr[0], tf, structInfo, regimeInfo);
 
       string pullbackDesc = (cycle.pullbackLevel == 4 ? "Deep EMA21 Pullback" : (cycle.pullbackLevel == 3 ? "EMA21 Retest" : (cycle.pullbackLevel == 2 ? "Value Zone Pullback" : "EMA9 Retest")));
-      string modeLabel = (InpTradeManagementMode == MODE_TREND_RUNNER_CROSSOVER) ? "Trend Runner (+1R BE)" : "Standard (2R TP1)";
+      string modeLabel = GetTradeManagementModeName(InpTradeManagementMode);
       string triggerReason = StringFormat("%s %s + Bullish Engulfing\nMode: %s | Entry: %s (Risk: %.1f%%)", tfLabel, pullbackDesc, modeLabel, (isReEntry ? StringFormat("Re-Entry #%d", cycle.reEntriesCount + 1) : "Primary"), tradeRisk);
 
       LogCoreSetupDiagnostic(true, sym, tf, ORDER_TYPE_BUY, cycle.pullbackLevel, (cycle.pullbackLevel == 4), h1Pass, true, isReEntry, tradeRisk, "Core M5 Bullish Pullback Approved");
@@ -2180,7 +2196,7 @@ void ProcessEMAPullbackForCycle(int idx, ENUM_TIMEFRAMES tf, SymbolCycleState &c
       SignalQuality q = CalculateQualityScore(idx, ORDER_TYPE_SELL, HTF_TREND_BEARISH, close[0], slPrice, risk, atr[0], tf, structInfo, regimeInfo);
 
       string pullbackDesc = (cycle.pullbackLevel == 4 ? "Deep EMA21 Pullback" : (cycle.pullbackLevel == 3 ? "EMA21 Retest" : (cycle.pullbackLevel == 2 ? "Value Zone Pullback" : "EMA9 Retest")));
-      string modeLabel = (InpTradeManagementMode == MODE_TREND_RUNNER_CROSSOVER) ? "Trend Runner (+1R BE)" : "Standard (2R TP1)";
+      string modeLabel = GetTradeManagementModeName(InpTradeManagementMode);
       string triggerReason = StringFormat("%s %s + Bearish Rejection\nMode: %s | Entry: %s (Risk: %.1f%%)", tfLabel, pullbackDesc, modeLabel, (isReEntry ? StringFormat("Re-Entry #%d", cycle.reEntriesCount + 1) : "Primary"), tradeRisk);
 
       LogCoreSetupDiagnostic(true, sym, tf, ORDER_TYPE_SELL, cycle.pullbackLevel, (cycle.pullbackLevel == 4), h1Pass, true, isReEntry, tradeRisk, "Core M5 Bearish Pullback Approved");
@@ -2564,18 +2580,40 @@ void ManageActiveTrades(datetime currentTime) {
          SendTrendRunnerMilestoneAlert(m_activeTrades[i], floorR, false);
       }
 
-      // Check 2R TP1 Partial Close (Standard Mode)
-      if(InpTradeManagementMode == MODE_STANDARD_PARTIAL_2R && !m_activeTrades[i].reachedTP1 && currentR >= 2.0) {
+      // Check 1:2 Partial Close (Standard & Partial Runner Modes)
+      bool isPartialMode = (InpTradeManagementMode == MODE_STANDARD_1_2_PARTIAL_1_3_TP || InpTradeManagementMode == MODE_STANDARD_PARTIAL_2R_RUNNER);
+      if(isPartialMode && !m_activeTrades[i].reachedTP1 && currentR >= InpPartialCloseRR) {
          double partialLot = NormalizeDouble(m_activeTrades[i].initialLot * (InpPartialClosePercent / 100.0), 2);
          if(partialLot > 0 && partialLot < PositionGetDouble(POSITION_VOLUME)) {
             if(m_trade.PositionClosePartial(ticket, partialLot)) {
                m_activeTrades[i].reachedTP1 = true;
                m_activeTrades[i].reachedBE = true;
                m_activeTrades[i].currentLot = PositionGetDouble(POSITION_VOLUME);
+               
+               // Calculate booked TP1 metrics
+               double tickValue = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
+               double tickSize  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+               double slTicks   = (tickSize > 0) ? (m_activeTrades[i].initialRiskDist / tickSize) : 0;
+               double bookedRiskMoney = (tickValue > 0 && slTicks > 0) ? (partialLot * slTicks * tickValue) : 25.0;
+               m_activeTrades[i].tp1RealizedR = (InpPartialClosePercent / 100.0) * currentR;
+               m_activeTrades[i].tp1RealizedProfit = bookedRiskMoney * currentR;
                m_isStateChanged = true;
 
-               SendTradeUpdateAlert("🎯 TP1 (2R)", m_activeTrades[i], currentR);
+               SendTradeUpdateAlert(StringFormat("🎯 TP1 (%.1fR)", InpPartialCloseRR), m_activeTrades[i], currentR);
+               PrintFormat("[921 SCANNER] TP1 (%.1fR) Booked on #%I64u (%s) | Closed: %.2f lots, Left: %.2f lots",
+                           InpPartialCloseRR, ticket, sym, partialLot, m_activeTrades[i].currentLot);
             }
+         }
+      }
+
+      // Check Final Take Profit Target (Standard 1:3 Mode & Fixed 1:3 Mode)
+      bool isFinalTPMode = (InpTradeManagementMode == MODE_STANDARD_1_2_PARTIAL_1_3_TP || InpTradeManagementMode == MODE_FIXED_1_3_TP);
+      if(isFinalTPMode && currentR >= InpTargetRR) {
+         if(m_trade.PositionClose(ticket)) {
+            PrintFormat("[921 SCANNER] 🎯 Final Target Hit (%.1fR) on #%I64u (%s) @ %.5f | Full Position Closed",
+                        InpTargetRR, ticket, sym, currentPrice);
+            SendTradeUpdateAlert(StringFormat("🎯 Final TP Hit (%.1fR)", InpTargetRR), m_activeTrades[i], currentR);
+            continue; // Trade closed in MT5; deal detection will archive it
          }
       }
    }
@@ -2739,13 +2777,13 @@ void ArchiveTrade(int index, double exitPrice, string exitReason) {
    if(foundRealDeal) {
       combinedRealizedProfit = realDealProfit;
       combinedRealizedR = (vt.initialRiskDist > 0) ? (isBuy ? (exitPrice - vt.entry) : (vt.entry - exitPrice)) / vt.initialRiskDist : runnerR;
-   } else if(InpTradeManagementMode == MODE_TREND_RUNNER_CROSSOVER) {
+   } else if(InpTradeManagementMode == MODE_TREND_RUNNER_CROSSOVER || InpTradeManagementMode == MODE_FIXED_1_3_TP) {
       // 100% full position held throughout
       combinedRealizedR = runnerR;
       combinedRealizedProfit = initialRiskMoney * runnerR;
    } else {
-      // Standard Model: 50% booked at TP1 (2R) + 50% runner
-      double runnerLotRatio = (vt.initialLot > 0) ? (vt.currentLot / vt.initialLot) : 0.5;
+      // Partial Modes (Standard 1:2 50% + 1:3 TP or Partial Runner): Booked TP1 + Remainder
+      double runnerLotRatio = (vt.initialLot > 0) ? (vt.currentLot / vt.initialLot) : (1.0 - (InpPartialClosePercent / 100.0));
       double runnerRealizedR = runnerLotRatio * runnerR;
       double runnerRealizedProfit = initialRiskMoney * runnerRealizedR;
       combinedRealizedR = vt.tp1RealizedR + runnerRealizedR;
@@ -3630,7 +3668,11 @@ string GetLiveTradesReportBlock() {
 
       string slStr = (sl > 0 && MathIsValidNumber(sl)) ? DoubleToString(sl, digits) : "N/A";
       string rStr  = (riskMoney > 0) ? StringFormat("%s%.2fR", (rr>=0?"+":""), rr) : "N/A";
-      string exitModeStr = (InpTradeManagementMode == MODE_TREND_RUNNER_CROSSOVER) ? "EMA Cross" : "2.0R (50%) -> Runner";
+      string exitModeStr = "1:3 TP";
+      if(InpTradeManagementMode == MODE_STANDARD_1_2_PARTIAL_1_3_TP) exitModeStr = "1:2 (50%) -> 1:3 TP";
+      else if(InpTradeManagementMode == MODE_FIXED_1_3_TP) exitModeStr = StringFormat("1:%.1f TP Full", InpTargetRR);
+      else if(InpTradeManagementMode == MODE_STANDARD_PARTIAL_2R_RUNNER) exitModeStr = "1:2 (50%) -> Runner";
+      else if(InpTradeManagementMode == MODE_TREND_RUNNER_CROSSOVER) exitModeStr = "Runner -> EMA Cross";
 
       msg += StringFormat(
          "%s <b>%s %s</b>\n"
