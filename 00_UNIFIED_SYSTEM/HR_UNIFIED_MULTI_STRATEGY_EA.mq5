@@ -220,6 +220,16 @@ private:
       }
    }
 
+   // Helper: Draw a WorldMonitor-style KPI Pill / Badge
+   void DrawBadge(int x, int y, int w, int h, string text, uint bgCol, uint borderCol, uint textCol)
+   {
+      m_canvas.FillRectangle(x, y, x + w, y + h, bgCol);
+      m_canvas.Rectangle(x, y, x + w, y + h, borderCol);
+      int textX = x + (w / 2) - ((int)StringLen(text) * 4);
+      if(textX < x + 3) textX = x + 3;
+      m_canvas.TextOut(textX, y + (h / 2) - 6, text, textCol);
+   }
+
 public:
    CBloombergTerminal() : m_initialized(false), m_width(0), m_height(0), m_canvasName("HR_Bloomberg_Master_Terminal") {}
    ~CBloombergTerminal() { Destroy(); }
@@ -284,6 +294,14 @@ public:
       uint colAmber      = ColorToARGB(0xD97706, 255); // Amber Warning 600 (#D97706)
       uint colTrackBg    = ColorToARGB(0xE2E8F0, 255); // Neutral track (#E2E8F0)
 
+      // WorldMonitor KPI Tint Tokens
+      uint colBullBg     = ColorToARGB(0xDCFCE7, 255); // Emerald light 100 (#DCFCE7)
+      uint colBullBrd    = ColorToARGB(0x86EFAC, 255); // Emerald light 300 (#86EFAC)
+      uint colBearBg     = ColorToARGB(0xFEE2E2, 255); // Red light 100 (#FEE2E2)
+      uint colBearBrd    = ColorToARGB(0xFCA5A5, 255); // Red light 300 (#FCA5A5)
+      uint colMutedBg    = ColorToARGB(0xF1F5F9, 255); // Slate light 100 (#F1F5F9)
+      uint colMutedBrd   = ColorToARGB(0xCBD5E1, 255); // Slate light 300 (#CBD5E1)
+
       m_canvas.Erase(colBg);
 
       // ====================================================================
@@ -338,11 +356,13 @@ public:
       uint dxyColor = (dxyChange >= 0.0) ? colBullGreen : colBearRed;
       m_canvas.TextOut(155, stripY + 8, dxyStr, dxyColor);
 
+      int corrX = 10 + (int)((m_width - 20) * 0.35);
+      if(corrX < 390) corrX = 390;
       m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
-      m_canvas.TextOut(480, stripY + 9, "ROLLING DXY CORR: Gold [-0.88] | Nasdaq [-0.74] | S&P 500 [-0.79] | Silver [-0.82]", colAccentBlue);
+      m_canvas.TextOut(corrX, stripY + 9, "ROLLING DXY CORR: Gold [-0.88] | Nasdaq [-0.74] | S&P 500 [-0.79] | Silver [-0.82]", colAccentBlue);
 
       m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-      m_canvas.TextOut(m_width - 290, stripY + 8, "SESSIONS: ASIA | LDN | NY (UK/US DST)", colBullGreen);
+      m_canvas.TextOut(m_width - 310, stripY + 8, "SESSIONS: ASIA | LDN | NY (UK/US DST)", colBullGreen);
 
       // ====================================================================
       // 3. FOUR MASTER INSTRUMENT PANELS (2x2 Grid)
@@ -386,20 +406,21 @@ public:
          uint badgeCol = (data[i].currentPrice > 0.0) ? colAccentBlue : colTextMuted;
          m_canvas.TextOut(x1 + 280, y1 + 14, statusBadge, badgeCol);
 
-         // SINGLE PROMINENT MARKET PRICE & DIRECTION
+         // SINGLE PROMINENT MARKET PRICE & DIRECTION WITH DIRECTIONAL ARROW
          m_canvas.FontSet("Consolas", 20, FW_BOLD);
          string priceStr;
          uint priceCol = colTextMuted;
          if(data[i].currentPrice > 0.0)
          {
-            priceStr = StringFormat("%.2f (%+.2f%%)", data[i].currentPrice, data[i].priceChangePct);
+            string arrow = (data[i].priceChangePct >= 0.0) ? "▲ " : "▼ ";
+            priceStr = arrow + StringFormat("%.2f (%+.2f%%)", data[i].currentPrice, data[i].priceChangePct);
             priceCol = (data[i].priceChangePct >= 0.0) ? colBullGreen : colBearRed;
          }
          else
          {
             priceStr = "-- (OFFLINE)";
          }
-         m_canvas.TextOut(x2 - 320, y1 + 12, priceStr, priceCol);
+         m_canvas.TextOut(x2 - 340, y1 + 12, priceStr, priceCol);
 
          // --- Card Content Body Layout (Grid of 6 Large Module Boxes) ---
          int bodyY1 = y1 + 56;
@@ -475,12 +496,45 @@ public:
          m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
          m_canvas.TextOut(c1_x1 + 12, r2_y1 + 8, "MULTI-TIMEFRAME MATRIX (M5/M15/H1/D1)", colTextBlack);
 
-         m_canvas.FontSet("Consolas", 14, FW_BOLD);
-         int mtfX = c1_x1 + 12;
-         m_canvas.TextOut(mtfX, r2_y1 + 30, "D1:" + data[i].mtfD1, (data[i].mtfD1 == "BULLISH" ? colBullGreen : (data[i].mtfD1 == "BEARISH" ? colBearRed : colTextMuted)));
-         m_canvas.TextOut(mtfX + 115, r2_y1 + 30, "H1:" + data[i].mtfH1, (data[i].mtfH1 == "BULLISH" ? colBullGreen : (data[i].mtfH1 == "BEARISH" ? colBearRed : colTextMuted)));
-         m_canvas.TextOut(mtfX + 230, r2_y1 + 30, "M15:" + data[i].mtfM15, (data[i].mtfM15 == "BULLISH" ? colBullGreen : (data[i].mtfM15 == "BEARISH" ? colBearRed : colTextMuted)));
-         m_canvas.TextOut(mtfX + 355, r2_y1 + 30, "M5:" + data[i].mtfM5, (data[i].mtfM5 == "BULLISH" ? colBullGreen : (data[i].mtfM5 == "BEARISH" ? colBearRed : colTextMuted)));
+         // Dynamic WorldMonitor Responsive Pill Badges
+         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
+         int badgeGap = 6;
+         int badgeW = (boxW - 24 - (3 * badgeGap)) / 4;
+         if(badgeW < 65) badgeW = 65;
+         int badgeH = 20;
+         int badgeY = r2_y1 + 28;
+
+         string tfs[4] = {"D1", "H1", "M15", "M5"};
+         string tfStates[4] = {data[i].mtfD1, data[i].mtfH1, data[i].mtfM15, data[i].mtfM5};
+
+         for(int j = 0; j < 4; j++)
+         {
+            int bx = c1_x1 + 12 + j * (badgeW + badgeGap);
+            string lbl;
+            uint bBg, bBrd, bTxt;
+            if(tfStates[j] == "BULLISH")
+            {
+               lbl = tfs[j] + " ▲ BULL";
+               bBg = colBullBg;
+               bBrd = colBullBrd;
+               bTxt = colBullGreen;
+            }
+            else if(tfStates[j] == "BEARISH")
+            {
+               lbl = tfs[j] + " ▼ BEAR";
+               bBg = colBearBg;
+               bBrd = colBearBrd;
+               bTxt = colBearRed;
+            }
+            else
+            {
+               lbl = tfs[j] + " -- NEUT";
+               bBg = colMutedBg;
+               bBrd = colMutedBrd;
+               bTxt = colTextMuted;
+            }
+            DrawBadge(bx, badgeY, badgeW, badgeH, lbl, bBg, bBrd, bTxt);
+         }
 
          m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
          string fvgNotice = (data[i].fvgStatus != "NONE" ? StringFormat("FVG: %s (%.1f-%.1f)", data[i].fvgStatus, data[i].fvgBottom, data[i].fvgTop) : "FVG: No Imbalance");
@@ -619,7 +673,8 @@ public:
          {
             if(data[s].currentPrice > 0.0)
             {
-               string pStr = StringFormat("%.2f (%+.2f%%)", data[s].currentPrice, data[s].priceChangePct);
+               string arrow = (data[s].priceChangePct >= 0.0 ? "▲ " : "▼ ");
+               string pStr = arrow + StringFormat("%.2f (%+.2f%%)", data[s].currentPrice, data[s].priceChangePct);
                uint cCol = (data[s].priceChangePct >= 0.0 ? colBullGreen : colBearRed);
                m_canvas.TextOut(bx1 + 12, barY + 28, pStr, cCol);
 
