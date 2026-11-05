@@ -5,10 +5,10 @@
 //+------------------------------------------------------------------+
 #property copyright   "Copyright 2026, Hemanth Ranam"
 #property link        "https://github.com/HR-Professional-Services/HemanthRanam-MT5-EAs"
-#property version     "2.00"
+#property version     "3.00"
 #property description "HR Unified Multi-Strategy Trading System & Institutional Bloomberg Quant Terminal."
 #property description "Single-chart multi-instrument EA managing 4 assets through 8 independent strategy modules."
-#property description "Phase 2 Single-File Consolidated Architecture with ICT/SMC, Session Intelligence & 5-Symbol Watchlist."
+#property description "Phase 3 Production-Hardened Architecture with Full ICT/SMC, Multi-Session Clock, Equal High/Low & 5-Symbol Ribbon."
 
 //====================================================================
 // NATIVE METATRADER 5 LIBRARIES ONLY (STRICT SINGLE-FILE ARCHITECTURE)
@@ -79,6 +79,22 @@ enum ENUM_SESSION_NAME
 };
 
 //+------------------------------------------------------------------+
+//| Multi-Session Intel Structure (Asian, London, NY AM/PM)          |
+//+------------------------------------------------------------------+
+struct SessionIntelligence
+{
+   string   activeSessionName;
+   string   activeKillzoneName;
+   bool     inAsian;
+   bool     inLondon;
+   bool     inNewYork;
+   bool     inOverlap;
+   datetime ukTime;
+   datetime nyTime;
+   string   nextSessionCountdown;
+};
+
+//+------------------------------------------------------------------+
 //| Comprehensive Instrument Quant & SMC Analytics Structure         |
 //+------------------------------------------------------------------+
 struct InstrumentQuantAnalytics
@@ -119,6 +135,12 @@ struct InstrumentQuantAnalytics
    double            obHigh;         // Order Block High
    double            obLow;          // Order Block Low
    string            obStatus;       // BULLISH OB, BEARISH OB, NONE
+   
+   // Equal Highs / Equal Lows (EQH / EQL)
+   bool              hasEQH;
+   double            eqhLevel;
+   bool              hasEQL;
+   double            eqlLevel;
    
    // Liquidity Engine
    double            nearestBSL;     // Buy-Side Liquidity
@@ -240,6 +262,7 @@ public:
       double dailyDD, double maxDailyDD, double openRisk, double maxRisk,
       int openPos, int maxPos,
       double dxyPrice, double dxyChange,
+      SessionIntelligence &sessIntel,
       InstrumentQuantAnalytics &data[]
    )
    {
@@ -276,28 +299,29 @@ public:
       m_canvas.TextOut(24, headY + 12, "HR BLOOMBERG QUANT TERMINAL", colTextBlack);
       
       m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-      m_canvas.FillRectangle(410, headY + 11, 620, headY + 39, colCardHeader);
-      m_canvas.Rectangle(410, headY + 11, 620, headY + 39, colBorder);
-      m_canvas.TextOut(422, headY + 15, "INSTITUTIONAL MARKET OS", colAccentBlue);
+      m_canvas.FillRectangle(390, headY + 11, 570, headY + 39, colCardHeader);
+      m_canvas.Rectangle(390, headY + 11, 570, headY + 39, colBorder);
+      m_canvas.TextOut(402, headY + 15, "INSTITUTIONAL MARKET OS", colAccentBlue);
 
-      // Live Server & UK Clock
-      m_canvas.FontSet("Consolas", 14, FW_BOLD);
-      string timeStr = StringFormat("SERVER: %s  |  UK GMT: %s",
-                                    TimeToString(serverTime, TIME_MINUTES|TIME_SECONDS),
-                                    TimeToString(ukTime, TIME_MINUTES|TIME_SECONDS));
-      m_canvas.TextOut(645, headY + 15, timeStr, colTextBlack);
+      // Live Server & Multi-Session Clocks (UK & NY)
+      m_canvas.FontSet("Consolas", 13, FW_BOLD);
+      string timeStr = StringFormat("SRV:%s | UK:%s | NY:%s", 
+                                    TimeToString(serverTime, TIME_MINUTES),
+                                    TimeToString(ukTime, TIME_MINUTES),
+                                    TimeToString(sessIntel.nyTime, TIME_MINUTES));
+      m_canvas.TextOut(585, headY + 16, timeStr, colTextBlack);
 
-      // Session Badge
-      uint sessCol = (sessionStatus == "ACTIVE" ? colBullGreen : colBearRed);
-      m_canvas.FillRectangle(1010, headY + 11, 1140, headY + 39, colCardHeader);
-      m_canvas.Rectangle(1010, headY + 11, 1140, headY + 39, sessCol);
-      m_canvas.TextOut(1022, headY + 15, "SESSION: " + sessionStatus, sessCol);
+      // Multi-Session Badge
+      uint sessCol = (sessIntel.inOverlap ? colBullGreen : (sessIntel.activeSessionName != "OFF-SESSION" ? colAccentBlue : colTextMuted));
+      m_canvas.FillRectangle(930, headY + 11, 1080, headY + 39, colCardHeader);
+      m_canvas.Rectangle(930, headY + 11, 1080, headY + 39, sessCol);
+      m_canvas.TextOut(940, headY + 15, sessIntel.activeSessionName, sessCol);
 
       // Risk Watchdog Panel
-      string riskStr = StringFormat("DD: %.2f%% / %.1f%%  |  RISK: %.2f%% / %.1f%%  |  POS: %d/%d",
+      string riskStr = StringFormat("DD: %.2f%%/%.1f%% | RISK: %.2f%%/%.1f%% | POS: %d/%d", 
                                     dailyDD, maxDailyDD, openRisk, maxRisk, openPos, maxPos);
       uint riskColor = (dailyDD >= maxDailyDD ? colBearRed : colTextBlack);
-      m_canvas.TextOut(m_width - 490, headY + 15, riskStr, riskColor);
+      m_canvas.TextOut(m_width - 480, headY + 16, riskStr, riskColor);
 
       // ====================================================================
       // 2. MACRO INTELLIGENCE & DXY STRIP (36px Height)
@@ -312,13 +336,13 @@ public:
 
       string dxyStr = StringFormat("US DOLLAR INDEX (DXY): %.3f (%+.2f%%)", dxyPrice, dxyChange);
       uint dxyColor = (dxyChange >= 0.0) ? colBullGreen : colBearRed;
-      m_canvas.TextOut(165, stripY + 8, dxyStr, dxyColor);
+      m_canvas.TextOut(155, stripY + 8, dxyStr, dxyColor);
 
       m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
-      m_canvas.TextOut(510, stripY + 9, "ROLLING DXY CORR:  Gold [-0.88] | Nasdaq [-0.74] | S&P 500 [-0.79] | Silver [-0.82]", colAccentBlue);
+      m_canvas.TextOut(480, stripY + 9, "ROLLING DXY CORR: Gold [-0.88] | Nasdaq [-0.74] | S&P 500 [-0.79] | Silver [-0.82]", colAccentBlue);
 
       m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-      m_canvas.TextOut(m_width - 275, stripY + 8, "NEWS FILTER: LOW RISK REGIME", colBullGreen);
+      m_canvas.TextOut(m_width - 290, stripY + 8, "SESSIONS: ASIA | LDN | NY (UK/US DST)", colBullGreen);
 
       // ====================================================================
       // 3. FOUR MASTER INSTRUMENT PANELS (2x2 Grid)
@@ -360,7 +384,7 @@ public:
          m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
          string statusBadge = (data[i].currentPrice > 0.0) ? StringFormat("%d / 8 STRATEGIES READY", data[i].activeStrategyCount) : "DISABLED / OFFLINE";
          uint badgeCol = (data[i].currentPrice > 0.0) ? colAccentBlue : colTextMuted;
-         m_canvas.TextOut(x1 + 290, y1 + 14, statusBadge, badgeCol);
+         m_canvas.TextOut(x1 + 280, y1 + 14, statusBadge, badgeCol);
 
          // SINGLE PROMINENT MARKET PRICE & DIRECTION
          m_canvas.FontSet("Consolas", 20, FW_BOLD);
@@ -403,7 +427,7 @@ public:
          int r3_y2 = r3_y1 + boxH;
 
          // =================================================================
-         // BOX 1 (R1C1): 9/21/200 EMA ENGINE
+         // BOX 1 (R1C1): 9/21/200 EMA ENGINE & SHORT-TERM CYCLE
          // =================================================================
          m_canvas.FillRectangle(c1_x1, r1_y1, c1_x2, r1_y2, colInnerBox);
          m_canvas.Rectangle(c1_x1, r1_y1, c1_x2, r1_y2, colInnerBrd);
@@ -443,7 +467,7 @@ public:
          m_canvas.TextOut(c2_x1 + 12, r1_y1 + 52, "ZONE: " + data[i].smcZone, zoneCol);
 
          // =================================================================
-         // BOX 3 (R2C1): MULTI-TIMEFRAME MATRIX (M5/M15/H1/D1)
+         // BOX 3 (R2C1): MULTI-TIMEFRAME MATRIX (M5/M15/H1/D1) & FVG
          // =================================================================
          m_canvas.FillRectangle(c1_x1, r2_y1, c1_x2, r2_y2, colInnerBox);
          m_canvas.Rectangle(c1_x1, r2_y1, c1_x2, r2_y2, colInnerBrd);
@@ -459,30 +483,37 @@ public:
          m_canvas.TextOut(mtfX + 355, r2_y1 + 30, "M5:" + data[i].mtfM5, (data[i].mtfM5 == "BULLISH" ? colBullGreen : (data[i].mtfM5 == "BEARISH" ? colBearRed : colTextMuted)));
 
          m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-         string fvgNotice = (data[i].fvgStatus != "NONE" ? StringFormat("FVG: %s (%.1f - %.1f)", data[i].fvgStatus, data[i].fvgBottom, data[i].fvgTop) : "FVG: No Imbalance");
+         string fvgNotice = (data[i].fvgStatus != "NONE" ? StringFormat("FVG: %s (%.1f-%.1f)", data[i].fvgStatus, data[i].fvgBottom, data[i].fvgTop) : "FVG: No Imbalance");
+         if(data[i].obStatus != "NONE")
+            fvgNotice += StringFormat(" | %s: %.1f", data[i].obStatus, data[i].obHigh);
          m_canvas.TextOut(c1_x1 + 12, r2_y1 + 54, fvgNotice, colAccentBlue);
 
          // =================================================================
-         // BOX 4 (R2C2): LIQUIDITY POOLS & ORDER FLOW GAUGE
+         // BOX 4 (R2C2): LIQUIDITY POOLS (BSL/SSL) & EQUAL HIGHS/LOWS
          // =================================================================
          m_canvas.FillRectangle(c2_x1, r2_y1, c2_x2, r2_y2, colInnerBox);
          m_canvas.Rectangle(c2_x1, r2_y1, c2_x2, r2_y2, colInnerBrd);
 
          m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
-         m_canvas.TextOut(c2_x1 + 12, r2_y1 + 8, "LIQUIDITY POOLS & ORDER FLOW GAUGE", colTextBlack);
+         m_canvas.TextOut(c2_x1 + 12, r2_y1 + 8, "LIQUIDITY POOLS & EQUAL HIGHS/LOWS", colTextBlack);
 
          m_canvas.FontSet("Consolas", 14, FW_BOLD);
          string bslStr = (data[i].currentPrice > 0.0) ? StringFormat("BSL: %.1f (%.0f pts)  |  SSL: %.1f (%.0f pts)", data[i].nearestBSL, data[i].bslDistancePoints, data[i].nearestSSL, data[i].sslDistancePoints) : "BSL: --  |  SSL: --";
          m_canvas.TextOut(c2_x1 + 12, r2_y1 + 30, bslStr, colTextBlack);
 
-         // Buying Pressure Progress Gauge Bar
+         // Equal Highs / Lows or Buying Pressure Gauge
          m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-         m_canvas.TextOut(c2_x1 + 12, r2_y1 + 54, StringFormat("RVOL: %.2fx | BUY PRESS:", data[i].rvol), colTextMuted);
+         string eqStr = "";
+         if(data[i].hasEQH) eqStr = StringFormat("EQH DETECTED: %.1f", data[i].eqhLevel);
+         else if(data[i].hasEQL) eqStr = StringFormat("EQL DETECTED: %.1f", data[i].eqlLevel);
+         else eqStr = StringFormat("RVOL: %.2fx | BUY PRESS:", data[i].rvol);
+         
+         m_canvas.TextOut(c2_x1 + 12, r2_y1 + 54, eqStr, colTextMuted);
 
          int gaugeX = c2_x1 + 220;
          int gaugeY = r2_y1 + 55;
          int gaugeW = c2_x2 - gaugeX - 16;
-         if(gaugeW > 50)
+         if(gaugeW > 50 && !data[i].hasEQH && !data[i].hasEQL)
          {
             m_canvas.FillRectangle(gaugeX, gaugeY, gaugeX + gaugeW, gaugeY + 12, colTrackBg);
             m_canvas.Rectangle(gaugeX, gaugeY, gaugeX + gaugeW, gaugeY + 12, colBorder);
@@ -655,6 +686,10 @@ public:
       out.obHigh = 0.0;
       out.obLow = 0.0;
       out.obStatus = "NONE";
+      out.hasEQH = false;
+      out.eqhLevel = 0.0;
+      out.hasEQL = false;
+      out.eqlLevel = 0.0;
       out.nearestBSL = 0.0;
       out.nearestSSL = 0.0;
       out.prevDayHigh = 0.0;
@@ -798,7 +833,7 @@ public:
          else out.rsiCondition = "NEUTRAL";
       }
 
-      // 6. Market Structure, Swings, BOS, CHOCH, FVG & Order Block (M5)
+      // 6. Market Structure, Swings, BOS, CHOCH, FVG, OB & Equal Highs/Lows (M5)
       MqlRates m5Rates[];
       ArraySetAsSeries(m5Rates, true);
       if(CopyRates(symbol, PERIOD_M5, 0, 40, m5Rates) >= 40)
@@ -867,6 +902,24 @@ public:
             out.lastSweepDirection = "NONE";
             out.sweepConfirmation = "UNCONFIRMED";
             out.chochStatus = "NONE";
+         }
+
+         // Equal Highs / Equal Lows (EQH / EQL) with 0.1 * ATR threshold
+         double eqhThreshold = (out.atr14 > 0.0) ? (out.atr14 * 0.10) : (pt * 15.0);
+         for(int eq = 2; eq <= 15; eq++)
+         {
+            if(MathAbs(m5Rates[1].high - m5Rates[eq].high) <= eqhThreshold && m5Rates[eq].high > m5Rates[eq-1].high && m5Rates[eq].high > m5Rates[eq+1].high)
+            {
+               out.hasEQH = true;
+               out.eqhLevel = m5Rates[eq].high;
+               break;
+            }
+            if(MathAbs(m5Rates[1].low - m5Rates[eq].low) <= eqhThreshold && m5Rates[eq].low < m5Rates[eq-1].low && m5Rates[eq].low < m5Rates[eq+1].low)
+            {
+               out.hasEQL = true;
+               out.eqlLevel = m5Rates[eq].low;
+               break;
+            }
          }
 
          // 3-Candle Fair Value Gap (FVG) Detection
@@ -2735,7 +2788,9 @@ void ManageExistingPositions()
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Section 10: On-Chart Dashboard Renderer                          |
+
+//+------------------------------------------------------------------+
+//| Section 10: On-Chart Dashboard Renderer (Production-Hardened)    |
 //+------------------------------------------------------------------+
 void RenderDashboard()
 {
@@ -2754,12 +2809,73 @@ void RenderDashboard()
    // Clear legacy comment to stop flicker
    Comment("");
 
-   // --- Render Full-Screen Bloomberg Master Terminal ---
+   // --- Compute Dynamic Multi-Session Intelligence ---
+   SessionIntelligence sessIntel;
+   sessIntel.ukTime = ukTime;
+   
+   // Compute NY Time (UK Time - 5 hours, accounts for US/UK DST schedules)
+   int brokerOffset = GetBrokerGMTOffset(serverTime);
+   datetime gmtTime = serverTime - (brokerOffset * 3600);
+   bool isUSDaylight = IsUKDaylightSaving(gmtTime); // US DST schedule approx
+   int nyOffset = (isUSDaylight ? -4 : -5);
+   sessIntel.nyTime = gmtTime + (nyOffset * 3600);
+
+   MqlDateTime dtUK;
+   TimeToStruct(ukTime, dtUK);
+   int ukHour = dtUK.hour;
+   
+   // Session bounds in UK Time (UTC/GMT)
+   // Asian Session: 00:00 - 08:00 UK
+   // London Session: 08:00 - 16:30 UK
+   // New York Session: 13:00 - 22:00 UK
+   // Overlap: 13:00 - 16:30 UK
+   sessIntel.inAsian   = (ukHour >= 0 && ukHour < 8);
+   sessIntel.inLondon  = (ukHour >= 8 && ukHour < 17);
+   sessIntel.inNewYork = (ukHour >= 13 && ukHour < 22);
+   sessIntel.inOverlap = (sessIntel.inLondon && sessIntel.inNewYork);
+
+   if(sessIntel.inOverlap)
+   {
+      sessIntel.activeSessionName = "LDN / NY OVERLAP";
+      sessIntel.activeKillzoneName = "NY AM KILLZONE";
+   }
+   else if(sessIntel.inNewYork)
+   {
+      sessIntel.activeSessionName = "NEW YORK SESSION";
+      sessIntel.activeKillzoneName = (ukHour < 17 ? "NY AM KILLZONE" : "NY PM KILLZONE");
+   }
+   else if(sessIntel.inLondon)
+   {
+      sessIntel.activeSessionName = "LONDON SESSION";
+      sessIntel.activeKillzoneName = (ukHour < 11 ? "LONDON OPEN KILLZONE" : "LONDON REGULAR");
+   }
+   else if(sessIntel.inAsian)
+   {
+      sessIntel.activeSessionName = "ASIAN SESSION";
+      sessIntel.activeKillzoneName = "ASIAN KILLZONE";
+   }
+   else
+   {
+      sessIntel.activeSessionName = "OFF-SESSION";
+      sessIntel.activeKillzoneName = "MAINTENANCE";
+   }
+
+   // --- Dynamic DXY Bid & Daily Change Calculation ---
    double dxyBid = 0.0;
    SymbolInfoDouble("DXY", SYMBOL_BID, dxyBid);
-   if(dxyBid <= 0.0) dxyBid = 101.567;
-   double dxyChange = -0.18;
+   if(dxyBid <= 0.0) SymbolInfoDouble("USDX", SYMBOL_BID, dxyBid);
+   if(dxyBid <= 0.0) SymbolInfoDouble("DX", SYMBOL_BID, dxyBid);
+   if(dxyBid <= 0.0) dxyBid = 101.567; // Fallback benchmark
 
+   double dxyChange = -0.18;
+   MqlRates dxyRates[];
+   ArraySetAsSeries(dxyRates, true);
+   if(CopyRates("DXY", PERIOD_D1, 0, 2, dxyRates) >= 2 && dxyRates[1].close > 0.0)
+   {
+      dxyChange = ((dxyBid - dxyRates[1].close) / dxyRates[1].close) * 100.0;
+   }
+
+   // --- Compute Independent Quant & SMC Analytics for 4 Trading Pairs ---
    InstrumentQuantAnalytics quantData[NUM_INSTRUMENTS];
    for(int k = 0; k < NUM_INSTRUMENTS; k++)
    {
@@ -2784,12 +2900,14 @@ void RenderDashboard()
       );
    }
 
+   // --- Render Full Bloomberg Institutional Terminal ---
    m_bloombergTerm.RenderTerminal(
       serverTime, ukTime, (isSession ? "ACTIVE" : "INACTIVE"),
       m_riskState.currentDailyDDPercent, InpMaxDailyDrawdownPercent,
       m_riskState.currentPortfolioOpenRiskPercent, InpMaxPortfolioRiskPercent,
       m_riskState.totalOpenPositions, InpMaxTotalOpenPositions,
       dxyBid, dxyChange,
+      sessIntel,
       quantData
    );
 }
