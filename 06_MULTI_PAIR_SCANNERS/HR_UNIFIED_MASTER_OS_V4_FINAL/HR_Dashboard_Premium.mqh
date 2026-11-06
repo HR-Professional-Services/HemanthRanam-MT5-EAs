@@ -2384,11 +2384,12 @@ public:
 
 
 
-         int visH = cy2 - curY - 8;
-
-
-
-         if(visH < 74) visH = 74;
+         // V4.2 Geometry: Reserve 56px for premium footer strip + 8px gap
+         int footH = 56;
+         int footY = cy2 - footH;
+         int visH = footY - curY - 8;
+         if(visH > 100) visH = 100;
+         if(visH < 65)  visH = 65;
 
 
 
@@ -2595,52 +2596,100 @@ public:
          DrawTrajectoryArea(v3_x + 10, curY + 22, v3_x + v3_w - 10, curY + visH - 6, isTrendBull, sparkLine, sparkFill, data[i].ema9_history);
 
          // ====================================================================
-         // SECTION D: A+ SETUP FOOTER STRIP (Height 38px, Full Card Width)
+         // SECTION D: V4.2 PREMIUM FOOTER STRIP (Height 56px, Full Card Width)
          // ====================================================================
-         int footY = cy2 - 38;
-         m_canvas.FillRectangle(cx1 + 1, footY, cx2 - 1, cy2 - 1, 0xFFF9FAFB);
-         m_canvas.Line(cx1, footY, cx2, footY, 0xFFE5E7EB);
+         // Using footH and footY declared above
 
-         // Left side: 3-step tracker with icons [v] Touch [v] Retest [ ] Close
-         int stepX = cx1 + 14;
-         int stepY = footY + 11;
-         m_canvas.FontSet("Segoe UI Bold", 10, FW_BOLD);
-
-         string iconTouch = (data[i].stepTouch ? "[✓] Touch" : "[○] Touch");
-         uint colTouch = (data[i].stepTouch ? colBullDark : colTextSubtle);
-         m_canvas.TextOut(stepX, stepY, iconTouch, colTouch);
-
-         string iconRetest = (data[i].stepRetest ? "[✓] Retest" : "[○] Retest");
-         uint colRetest = (data[i].stepRetest ? colBullDark : colTextSubtle);
-         m_canvas.TextOut(stepX + 68, stepY, iconRetest, colRetest);
-
-         string iconClose = (data[i].stepClose ? "[✓] Close" : "[○] Close");
-         uint colClose = (data[i].stepClose ? colBullDark : colTextSubtle);
-         m_canvas.TextOut(stepX + 138, stepY, iconClose, colClose);
-
-         // Center: Signal pill (e.g. SELL READY 85% or WAIT 40%)
-         int pillX = stepX + 215;
-         int pillW = 115;
-         int pillH = 22;
-         DrawPill(pillX, footY + 8, pillW, pillH, data[i].signalText, data[i].signalPillBg, colPillText, 10, true);
-
-         // Right side: Entry / Stop / TP / Lot readout
-         int paramX = pillX + pillW + 12;
-         m_canvas.FontSet("Consolas", 10, FW_BOLD);
-         string levelsStr;
-         if(i == 1) // Silver 3 decimals
+         // Subtle gradient fill (#F8FAFC to #F1F5F9) & crisp border top (#E2E8F0)
+         for(int fy = footY; fy < cy2 - 1; fy++)
          {
-            levelsStr = StringFormat("Entry: %.3f | Stop: %.3f | TP: %.3f | Lot: %.2f",
-                                     data[i].calcEntry, data[i].calcStop, data[i].calcTP, data[i].calcLot);
+            double ratio = (double)(fy - footY) / (double)footH;
+            // Lerp from #F8FAFC (248, 250, 252) to #F1F5F9 (241, 245, 249)
+            int grR = (int)(248 - ratio * 7.0);
+            int grG = (int)(250 - ratio * 5.0);
+            int grB = (int)(252 - ratio * 3.0);
+            uint grCol = 0xFF000000 | (grR << 16) | (grG << 8) | grB;
+            m_canvas.Line(cx1 + 1, fy, cx2 - 1, fy, grCol);
+         }
+         m_canvas.Line(cx1, footY, cx2, footY, 0xFFE2E8F0);
+         m_canvas.Line(cx1, footY + 1, cx2, footY + 1, 0xFFF1F5F9);
+
+         // 1. Left side: 3-step tracker with bold icons [v] Touch [v] Retest [o] Close
+         int stepX = cx1 + 16;
+         int midFootY = footY + (footH / 2);
+         m_canvas.FontSet("Segoe UI Bold", 11, FW_BOLD);
+
+         string iconTouch = (data[i].stepTouch ? "['13] Touch" : "[%CB] Touch");
+         uint colTouch = (data[i].stepTouch ? colBullDark : 0xFF9CA3AF);
+         m_canvas.TextOut(stepX, midFootY - 7, iconTouch, colTouch);
+
+         string iconRetest = (data[i].stepRetest ? "['13] Retest" : "[%CB] Retest");
+         uint colRetest = (data[i].stepRetest ? colBullDark : 0xFF9CA3AF);
+         m_canvas.TextOut(stepX + 80, midFootY - 7, iconRetest, colRetest);
+
+         string iconClose = (data[i].stepClose ? "['13] Close" : "[%CB] Close");
+         uint colClose = (data[i].stepClose ? colBullDark : 0xFF9CA3AF);
+         m_canvas.TextOut(stepX + 160, midFootY - 7, iconClose, colClose);
+
+         // 2. Center: Signal pill (110x28px, 11px Arial Black)
+         int pillX = stepX + 248;
+         int pillW = 110;
+         int pillH = 28;
+         int pillY = footY + (footH - pillH) / 2;
+         uint pillBg = data[i].signalPillBg;
+         uint pillTxtCol = colPillText;
+         uint pillBrd = 0xFFFBBF24;
+
+         if(data[i].isAPlusReady)
+         {
+            pillBg = 0xFFFEE2E2;     // Light red
+            pillTxtCol = 0xFF991B1B; // Dark red
+            pillBrd = 0xFFEF4444;    // Red border
+            // 500ms soft pulse
+            if((GetTickCount() / 500) % 2 == 1)
+               pillBg = 0xFFFECACA;
          }
          else
          {
-            levelsStr = StringFormat("Entry: %.2f | Stop: %.2f | TP: %.2f | Lot: %.2f",
-                                     data[i].calcEntry, data[i].calcStop, data[i].calcTP, data[i].calcLot);
+            pillBg = 0xFFFEF3C7;     // Light amber
+            pillTxtCol = 0xFF92400E; // Dark amber
+            pillBrd = 0xFFFBBF24;    // Amber border
          }
-         m_canvas.TextOut(paramX, footY + 11, levelsStr, colTextBlack);
 
+         DrawPill(pillX, pillY, pillW, pillH, data[i].signalText, pillBg, pillTxtCol, 11, true);
+         // Border around pill
+         m_canvas.Rectangle(pillX, pillY, pillX + pillW, pillY + pillH, pillBrd);
 
+         // 3. Right side: Entry / Stop / TP / Lot (Horizontal Flow: 10px Bold Labels + 13px Consolas Bold Digital Values)
+         int rx = pillX + pillW + 16;
+         int midY = footY + (footH / 2);
+
+         m_canvas.FontSet("Segoe UI Bold", 10, FW_BOLD);
+         m_canvas.TextOut(rx, midY - 6, "Entry:", 0xFF6B7280);
+         m_canvas.FontSet("Consolas", 13, FW_BOLD);
+         string entryVal = (i == 1) ? StringFormat("%.3f", data[i].calcEntry) : StringFormat("%.2f", data[i].calcEntry);
+         m_canvas.TextOut(rx + 40, midY - 7, entryVal, 0xFF111827);
+
+         int stopX = rx + 120;
+         m_canvas.FontSet("Segoe UI Bold", 10, FW_BOLD);
+         m_canvas.TextOut(stopX, midY - 6, "Stop:", 0xFF6B7280);
+         m_canvas.FontSet("Consolas", 13, FW_BOLD);
+         string stopVal = (i == 1) ? StringFormat("%.3f", data[i].calcStop) : StringFormat("%.2f", data[i].calcStop);
+         m_canvas.TextOut(stopX + 36, midY - 7, stopVal, 0xFFEF4444);
+
+         int tpX = stopX + 115;
+         m_canvas.FontSet("Segoe UI Bold", 10, FW_BOLD);
+         m_canvas.TextOut(tpX, midY - 6, "TP:", 0xFF6B7280);
+         m_canvas.FontSet("Consolas", 13, FW_BOLD);
+         string tpVal = (i == 1) ? StringFormat("%.3f", data[i].calcTP) : StringFormat("%.2f", data[i].calcTP);
+         m_canvas.TextOut(tpX + 26, midY - 7, tpVal, 0xFF10B981);
+
+         int lotX = tpX + 110;
+         m_canvas.FontSet("Segoe UI Bold", 10, FW_BOLD);
+         m_canvas.TextOut(lotX, midY - 6, "Lot:", 0xFF6B7280);
+         m_canvas.FontSet("Consolas", 13, FW_BOLD);
+         string lotVal = StringFormat("%.2f", data[i].calcLot);
+         m_canvas.TextOut(lotX + 28, midY - 7, lotVal, 0xFF2563EB);
 
       }
 
