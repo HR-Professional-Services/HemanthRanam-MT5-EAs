@@ -170,7 +170,43 @@ private:
 
 
 
-   void DrawPill(int x, int y, int w, int h, string text, uint bgCol, uint textCol, int fontSize = 16, bool isBold = true)
+      // Helper: Draw clean status check circle [v] or [o] with high contrast
+   void DrawStatusCheck(int x, int y, string label, bool isDone, bool isPendingAlert, uint bullCol, uint textSubtle)
+   {
+      int boxSize = 14;
+      int cy = y + 7;
+      if(isDone)
+      {
+         // Solid emerald green badge with white checkmark
+         m_canvas.FillRectangle(x, y, x + boxSize, y + boxSize, 0xFF10B981);
+         m_canvas.Rectangle(x, y, x + boxSize, y + boxSize, 0xFF059669);
+         // Render white checkmark line: (x+3, y+7)->(x+6, y+10)->(x+11, y+3)
+         m_canvas.Line(x + 3, y + 7, x + 6, y + 10, 0xFFFFFFFF);
+         m_canvas.Line(x + 3, y + 8, x + 6, y + 11, 0xFFFFFFFF);
+         m_canvas.Line(x + 6, y + 10, x + 11, y + 3, 0xFFFFFFFF);
+         m_canvas.Line(x + 6, y + 11, x + 11, y + 4, 0xFFFFFFFF);
+         
+         m_canvas.FontSet("Segoe UI Bold", 11, FW_BOLD);
+         m_canvas.TextOut(x + boxSize + 6, y, label, 0xFF10B981);
+      }
+      else
+      {
+         // Subtle gray or alert amber open circle/box
+         uint brdCol = isPendingAlert ? 0xFFF59E0B : 0xFF9CA3AF;
+         uint bgCol  = isPendingAlert ? 0xFFFEF3C7 : 0xFFFFFFFF;
+         uint txtCol = isPendingAlert ? 0xFFD97706 : 0xFF9CA3AF;
+
+         m_canvas.FillRectangle(x, y, x + boxSize, y + boxSize, bgCol);
+         m_canvas.Rectangle(x, y, x + boxSize, y + boxSize, brdCol);
+         // Inner dot for open circle
+         m_canvas.FillRectangle(x + 5, y + 5, x + 9, y + 9, brdCol);
+
+         m_canvas.FontSet("Segoe UI Bold", 11, FW_BOLD);
+         m_canvas.TextOut(x + boxSize + 6, y, label, txtCol);
+      }
+   }
+
+void DrawPill(int x, int y, int w, int h, string text, uint bgCol, uint textCol, int fontSize = 16, bool isBold = true)
 
 
 
@@ -2620,19 +2656,10 @@ public:
          m_canvas.FontSet("Segoe UI Bold", 9, FW_BOLD);
          m_canvas.TextOut(secA_X, row1Y, "9/21 ENTRY CHAIN", 0xFF6B7280);
 
-         // 3 items with icons 11px bold
-         m_canvas.FontSet("Segoe UI Bold", 11, FW_BOLD);
-         string iconTouch = (data[i].stepTouch ? "['13] Touch 21" : "[%CB] Touch 21");
-         uint colTouch = (data[i].stepTouch ? colBullDark : 0xFF9CA3AF);
-         m_canvas.TextOut(secA_X, row2Y, iconTouch, colTouch);
-
-         string iconRetest = (data[i].stepRetest ? "['13] Retest" : "[%CB] Retest");
-         uint colRetest = (data[i].stepRetest ? colBullDark : 0xFF9CA3AF);
-         m_canvas.TextOut(secA_X + 90, row2Y, iconRetest, colRetest);
-
-         string iconClose = (data[i].stepClose ? "['13] Close" : "[%CB] Close");
-         uint colClose = (data[i].stepClose ? colBullDark : (data[i].stepRetest ? 0xFFF59E0B : 0xFF9CA3AF));
-         m_canvas.TextOut(secA_X + 165, row2Y, iconClose, colClose);
+         // 3 items with custom crisp visual checkboxes
+         DrawStatusCheck(secA_X, row2Y, "Touch 21", data[i].stepTouch, false, colBullDark, colTextSubtle);
+         DrawStatusCheck(secA_X + 86, row2Y, "Retest", data[i].stepRetest, false, colBullDark, colTextSubtle);
+         DrawStatusCheck(secA_X + 162, row2Y, "Close", data[i].stepClose, (!data[i].stepClose && data[i].stepRetest), colBullDark, colTextSubtle);
 
          // Divider line
          m_canvas.Line(secA_X + secA_W - 8, footY + 8, secA_X + secA_W - 8, cy2 - 8, 0xFFE2E8F0);
@@ -2712,32 +2739,43 @@ public:
          m_canvas.FontSet("Segoe UI Bold", 9, FW_BOLD);
          m_canvas.TextOut(slopeX, row1Y + 1, "Slope:", 0xFF6B7280);
          m_canvas.FontSet("Segoe UI Bold", 11, FW_BOLD);
-         uint slopeCol = (data[i].m5_slope_arrows == "\x2193\x2193\x2193") ? 0xFFEF4444 : 0xFF10B981;
-         m_canvas.TextOut(slopeX + 40, row1Y, data[i].m5_slope_arrows, slopeCol);
+         // Clean ASCII arrows [v v v] or [^ ^ ^]
+         string arrowStr = (data[i].m5EmaState == "BEARISH") ? "[v v v]" : "[^ ^ ^]";
+         uint slopeCol = (data[i].m5EmaState == "BEARISH") ? 0xFFEF4444 : 0xFF10B981;
+         m_canvas.TextOut(slopeX + 40, row1Y, arrowStr, slopeCol);
 
-         // Row 2: Entry / Stop / TP / Lot
+         // Row 2: Entry / Stop / TP / Lot with clear " | " separators
          m_canvas.FontSet("Segoe UI Bold", 9, FW_BOLD);
          m_canvas.TextOut(secC_X, row2Y + 1, "Entry:", 0xFF6B7280);
          m_canvas.FontSet("Consolas", 12, FW_BOLD);
          string entryStr = (i == 1) ? StringFormat("%.3f", data[i].calcEntry) : StringFormat("%.2f", data[i].calcEntry);
          m_canvas.TextOut(secC_X + 36, row2Y, entryStr, 0xFF111827);
 
-         int sStopX = secC_X + 104;
+         int sSep1X = secC_X + 96;
          m_canvas.FontSet("Segoe UI Bold", 9, FW_BOLD);
+         m_canvas.TextOut(sSep1X, row2Y + 1, "|", 0xFFD1D5DB);
+
+         int sStopX = sSep1X + 10;
          m_canvas.TextOut(sStopX, row2Y + 1, "Stop:", 0xFF6B7280);
          m_canvas.FontSet("Consolas", 12, FW_BOLD);
          string stopStr = (i == 1) ? StringFormat("%.3f", data[i].calcStop) : StringFormat("%.2f", data[i].calcStop);
          m_canvas.TextOut(sStopX + 34, row2Y, stopStr, 0xFFEF4444);
 
-         int sTpX = sStopX + 102;
+         int sSep2X = sStopX + 94;
          m_canvas.FontSet("Segoe UI Bold", 9, FW_BOLD);
+         m_canvas.TextOut(sSep2X, row2Y + 1, "|", 0xFFD1D5DB);
+
+         int sTpX = sSep2X + 10;
          m_canvas.TextOut(sTpX, row2Y + 1, "TP:", 0xFF6B7280);
          m_canvas.FontSet("Consolas", 12, FW_BOLD);
          string tpStr = (i == 1) ? StringFormat("%.3f", data[i].calcTP) : StringFormat("%.2f", data[i].calcTP);
          m_canvas.TextOut(sTpX + 24, row2Y, tpStr, 0xFF10B981);
 
-         int sLotX = sTpX + 96;
+         int sSep3X = sTpX + 88;
          m_canvas.FontSet("Segoe UI Bold", 9, FW_BOLD);
+         m_canvas.TextOut(sSep3X, row2Y + 1, "|", 0xFFD1D5DB);
+
+         int sLotX = sSep3X + 10;
          m_canvas.TextOut(sLotX, row2Y + 1, "Lot:", 0xFF6B7280);
          m_canvas.FontSet("Consolas", 12, FW_BOLD);
          string lotStr = StringFormat("%.2f (1%%)", data[i].calcLot);
@@ -2770,7 +2808,8 @@ public:
          DrawPill(secD_X, row2Y - 2, 70, 20, gapText, gapBg, gapTxt, 9, true);
 
          m_canvas.FontSet("Segoe UI Bold", 9, FW_BOLD);
-         m_canvas.TextOut(secD_X + 80, row2Y + 2, "Health: 100%", 0xFF6B7280);
+         string healthStr = StringFormat("Health: %.0f%%", (data[i].emaHealthScore > 0 ? data[i].emaHealthScore : 100.0));
+         m_canvas.TextOut(secD_X + 78, row2Y + 2, healthStr, 0xFF6B7280);
 
       }
 

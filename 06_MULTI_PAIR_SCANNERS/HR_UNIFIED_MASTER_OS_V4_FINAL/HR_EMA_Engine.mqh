@@ -147,23 +147,34 @@ public:
       if(CopyBuffer(h_e200_h1, 0, 0, 1, h1_200_val) > 0 && h1_200_val[0] > 0)
       {
          out.h1_ema200_val = h1_200_val[0];
-         longOnly  = (out.currentPrice > h1_200_val[0]);
-         shortOnly = (out.currentPrice < h1_200_val[0]);
+      }
+      else if(out.ema200_m5 > 0.0)
+      {
+         out.h1_ema200_val = out.ema200_m5;
+      }
+
+      // Strict mathematical check against live price
+      if(out.h1_ema200_val > 0.0)
+      {
+         if(out.currentPrice < out.h1_ema200_val)
+         {
+            shortOnly = true;
+            longOnly  = false;
+            out.h1_filter_badge = "H: BELOW 200 = SHORT ONLY";
+         }
+         else
+         {
+            longOnly  = true;
+            shortOnly = false;
+            out.h1_filter_badge = "H: ABOVE 200 = LONG ONLY";
+         }
       }
       else
       {
-         // Resilient fallback to overall H1 state
-         out.h1_ema200_val = out.ema200_m5;
          longOnly  = (out.h1EmaState == "BULLISH");
          shortOnly = (out.h1EmaState == "BEARISH");
+         out.h1_filter_badge = shortOnly ? "H: BELOW 200 = SHORT ONLY" : "H: ABOVE 200 = LONG ONLY";
       }
-
-      if(shortOnly)
-         out.h1_filter_badge = "1H: BELOW 200 = SHORT ONLY";
-      else if(longOnly)
-         out.h1_filter_badge = "1H: ABOVE 200 = LONG ONLY";
-      else
-         out.h1_filter_badge = "1H: 200 NEUTRAL";
 
       // 2. Check M5 alignment: ema9 < ema21 < ema200 = Bearish, ema9 > ema21 > ema200 = Bullish
       bool m5BearAligned = (out.ema9_m5 < out.ema21_m5 && out.ema21_m5 < out.ema200_m5);
@@ -246,15 +257,34 @@ public:
       {
          out.signalText   = "SELL READY 85%";
          out.signalPillBg = 0xFFEF4444; // Red
+         out.signalConfidenceScore = 85.0;
       }
       else if(buyReady)
       {
          out.signalText   = "BUY READY 85%";
          out.signalPillBg = 0xFF10B981; // Green
+         out.signalConfidenceScore = 85.0;
       }
       else
       {
-         out.signalText   = "WAIT 40%";
+         // Dynamic WAIT confidence: Base 30% + Health/4 + Separation + Slope + 1H alignment
+         double conf = 30.0;
+         conf += (out.emaHealthScore * 0.15); // up to +15%
+         if(out.emaSeparationPct >= 0.08) conf += 10.0;
+         else if(out.emaSeparationPct >= 0.04) conf += 5.0;
+
+         // Check slope alignment
+         if((shortOnly && slopeDown) || (longOnly && slopeUp)) conf += 10.0;
+
+         // Check 1H filter alignment
+         if((shortOnly && out.m5EmaState == "BEARISH") || (longOnly && out.m5EmaState == "BULLISH")) conf += 10.0;
+
+         // Clamp between 30% and 55% during WAIT mode
+         if(conf < 30.0) conf = 30.0;
+         if(conf > 55.0) conf = 55.0;
+
+         out.signalConfidenceScore = conf;
+         out.signalText   = StringFormat("WAIT %.0f%%", conf);
          out.signalPillBg = 0xFFF59E0B; // Amber
       }
 
@@ -295,17 +325,27 @@ public:
       double stopDistance = MathAbs(out.calcEntry - out.calcStop);
       double stopPts = (pt > 0.0) ? (stopDistance / pt) : (stopDistance * 100.0);
       double tickVal = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+      double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
 
       double lotCalc = 0.24;
-      if(stopPts > 0.0 && tickVal > 0.0)
+      // If tick value is in points or currency, check lossPerLot
+      double lossPerLot = 0.0;
+      if(contractSize > 0.0 && stopDistance > 0.0)
       {
-         lotCalc = riskUSD / (stopPts * tickVal);
+         lossPerLot = stopDistance * contractSize;
+      }
+      else if(stopPts > 0.0 && tickVal > 0.0)
+      {
+         lossPerLot = stopPts * tickVal;
+      }
+
+      if(lossPerLot > 0.0)
+      {
+         lotCalc = riskUSD / lossPerLot;
       }
       else if(stopDistance > 0.0)
       {
-         double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-         if(contractSize <= 0) contractSize = 100.0;
-         lotCalc = riskUSD / (stopDistance * contractSize);
+         lotCalc = riskUSD / (stopDistance * 100.0);
       }
 
       // Clamp lot size to broker min 0.01, max 5.00, 2 decimals
