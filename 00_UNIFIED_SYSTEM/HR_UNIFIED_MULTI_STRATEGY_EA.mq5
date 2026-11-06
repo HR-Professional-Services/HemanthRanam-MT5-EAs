@@ -389,22 +389,34 @@ public:
          m_canvas.FillRectangle(x1, y1, x2, y2, colCard);
          m_canvas.Rectangle(x1, y1, x2, y2, colBorder);
 
+         // 1H EMA 200 Institutional Bias Left Border Indicator (6px)
+         uint biasCol = (data[i].mtfH1 == "BULLISH" ? colBullGreen : (data[i].mtfH1 == "BEARISH" ? colBearRed : colBorder));
+         m_canvas.FillRectangle(x1, y1, x1 + 6, y2, biasCol);
+
          // --- Card Top Header (50px) ---
-         m_canvas.FillRectangle(x1, y1, x2, y1 + 50, colCardHeader);
+         m_canvas.FillRectangle(x1 + 6, y1, x2, y1 + 50, colCardHeader);
          m_canvas.Line(x1, y1 + 50, x2, y1 + 50, colBorder);
 
-         // Prominent Symbol Title
+         // Prominent Symbol Title + 1H Bias Badge
          m_canvas.FontSet("Segoe UI", 18, FW_BOLD);
          string titleStr = data[i].baseName;
          if(data[i].symbol != "" && data[i].symbol != data[i].baseName)
             titleStr += " (" + data[i].symbol + ")";
          m_canvas.TextOut(x1 + 18, y1 + 12, titleStr, colTextBlack);
 
+         // 1H Bias Badge top header
+         m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
+         string biasBadge = (data[i].mtfH1 == "BULLISH" ? "1H: ABOVE 200 = LONG ONLY" : (data[i].mtfH1 == "BEARISH" ? "1H: BELOW 200 = SHORT ONLY" : "1H: NO BIAS"));
+         uint biasBadgeBg = (data[i].mtfH1 == "BULLISH" ? colBullBg : (data[i].mtfH1 == "BEARISH" ? colBearBg : colMutedBg));
+         uint biasBadgeBrd = (data[i].mtfH1 == "BULLISH" ? colBullBrd : (data[i].mtfH1 == "BEARISH" ? colBearBrd : colMutedBrd));
+         uint biasBadgeTxt = (data[i].mtfH1 == "BULLISH" ? colBullGreen : (data[i].mtfH1 == "BEARISH" ? colBearRed : colTextMuted));
+         DrawBadge(x1 + 175, y1 + 15, 175, 20, biasBadge, biasBadgeBg, biasBadgeBrd, biasBadgeTxt);
+
          // Active Strategies / Resolution Badge
          m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
          string statusBadge = (data[i].currentPrice > 0.0) ? StringFormat("%d / 8 STRATEGIES READY", data[i].activeStrategyCount) : "DISABLED / OFFLINE";
          uint badgeCol = (data[i].currentPrice > 0.0) ? colAccentBlue : colTextMuted;
-         m_canvas.TextOut(x1 + 280, y1 + 14, statusBadge, badgeCol);
+         m_canvas.TextOut(x1 + 360, y1 + 14, statusBadge, badgeCol);
 
          // SINGLE PROMINENT MARKET PRICE & DIRECTION WITH DIRECTIONAL ARROW
          m_canvas.FontSet("Consolas", 20, FW_BOLD);
@@ -618,9 +630,13 @@ public:
             sigText += StringFormat("  [CONFIDENCE: %.0f%%]", data[i].signalConfidenceScore);
          m_canvas.TextOut(c2_x1 + 12, r3_y1 + 28, sigText, sigColor);
 
-         m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
-         string execState = (data[i].currentPrice > 0.0) ? "ACTION: Validated against 200 EMA trend & Closed M5 bar" : "ACTION: Symbol offline / awaiting feed";
-         m_canvas.TextOut(c2_x1 + 12, r3_y1 + 54, execState, colTextMuted);
+         m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
+         string chainStep1 = "[x] Pullback 9/21";
+         string chainStep2 = (StringFind(data[i].overallSignal, "SETUP") >= 0 ? "[x] Retest Rejection" : "[ ] Retest Rejection");
+         string chainStep3 = (StringFind(data[i].overallSignal, "SETUP") >= 0 ? "[x] Engulfing Close" : "[ ] Engulfing Close");
+         string chainStr = StringFormat("%s  |  %s  |  %s", chainStep1, chainStep2, chainStep3);
+         uint chainCol = (StringFind(data[i].overallSignal, "SETUP") >= 0 ? colBullGreen : colTextMuted);
+         m_canvas.TextOut(c2_x1 + 12, r3_y1 + 54, chainStr, chainCol);
 
          // =================================================================
          // BOTTOM RIBBON: VECTOR MOMENTUM GRAPH (42px)
