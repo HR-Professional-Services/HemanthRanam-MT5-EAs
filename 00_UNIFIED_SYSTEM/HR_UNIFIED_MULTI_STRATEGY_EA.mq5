@@ -223,49 +223,52 @@ private:
       m_canvas.Rectangle(x1, y1, x2, y2, brdCol);
    }
 
-   // Helper: Draw Speedometer Arc Gauge with needle for RSI
+   // Helper: Draw Speedometer Arc Gauge with needle for RSI (Matching Reference Image)
    void DrawSpeedometerGauge(int cx, int cy, int radius, double val, double minVal, double maxVal, uint colTrack, uint colGreen, uint colRed, uint colNeedle)
    {
-      // 180 degree semi-circle arc (from 180 deg to 360 deg)
       double clamped = MathMax(minVal, MathMin(maxVal, val));
       double pct = (clamped - minVal) / (maxVal - minVal); // 0.0 to 1.0
 
-      // Draw arc segments (Red on left 0-30, Grey in middle 30-70, Green on right 70-100)
-      for(int a = 180; a <= 360; a += 3)
+      // Draw thick curved arc band (Red zone on left, Neutral track middle, Green zone on right)
+      for(int r = radius - 4; r <= radius + 2; r++)
       {
-         double rad = a * M_PI / 180.0;
-         int px = (int)(cx + radius * MathCos(rad));
-         int py = (int)(cy + radius * MathSin(rad));
-         
-         uint arcColor = colTrack;
-         if(a <= 234) arcColor = colRed;        // Low / oversold (red)
-         else if(a >= 306) arcColor = colGreen;  // High / overbought (green)
-         
-         m_canvas.FillCircle(px, py, 3, arcColor);
+         for(int a = 180; a <= 360; a += 1)
+         {
+            double rad = a * M_PI / 180.0;
+            int px = (int)(cx + r * MathCos(rad));
+            int py = (int)(cy + r * MathSin(rad));
+            
+            uint arcColor = colTrack;
+            if(a <= 230)      arcColor = colRed;   // Left red zone (0-28%)
+            else if(a >= 310) arcColor = colGreen; // Right green zone (72-100%)
+            
+            m_canvas.PixelSet(px, py, arcColor);
+         }
       }
 
       // Draw Needle pointing to current value
       double needleAngle = 180.0 + (pct * 180.0);
       double needleRad = needleAngle * M_PI / 180.0;
-      int needleLen = radius - 4;
+      int needleLen = radius - 2;
       int nx = (int)(cx + needleLen * MathCos(needleRad));
       int ny = (int)(cy + needleLen * MathSin(needleRad));
       m_canvas.Line(cx, cy, nx, ny, colNeedle);
-      m_canvas.FillCircle(cx, cy, 3, colNeedle);
+      m_canvas.Line(cx - 1, cy, nx - 1, ny, colNeedle);
+      m_canvas.FillCircle(cx, cy, 4, colNeedle);
    }
 
-   // Helper: Draw Trajectory Sparkline with Gradient Shaded Area
+   // Helper: Draw Trajectory Sparkline with Gradient Shaded Area (Exact Match to Reference Image)
    void DrawTrajectoryArea(int x1, int y1, int x2, int y2, bool isBullish, uint lineCol, uint fillCol)
    {
       int w = x2 - x1;
       int h = y2 - y1;
       if(w <= 10 || h <= 10) return;
 
-      int points = 16;
+      int points = 18;
       int prevX = x1;
-      int prevY = isBullish ? (y2 - 6) : (y1 + 8);
+      int prevY = isBullish ? (y2 - 8) : (y1 + 8);
 
-      for(int p = 1; p < points; p++)
+      for(int p = 0; p < points; p++)
       {
          int px = x1 + (int)((double)p / (points - 1) * w);
          double progress = (double)p / (points - 1);
@@ -273,25 +276,33 @@ private:
          int py;
          if(isBullish)
          {
-            // Trending upwards
-            double wave = MathSin(p * 0.9) * (h * 0.12);
-            py = (int)(y2 - 6 - (progress * (h - 16)) + wave);
+            // Trending upwards with multi-crest momentum
+            double wave = MathSin(p * 1.1) * (h * 0.14) + MathCos(p * 0.6) * (h * 0.08);
+            py = (int)(y2 - 10 - (progress * (h - 22)) + wave);
          }
          else
          {
-            // Trending downwards
-            double wave = MathSin(p * 0.9) * (h * 0.12);
-            py = (int)(y1 + 8 + (progress * (h - 16)) + wave);
+            // Trending downwards with multi-crest momentum
+            double wave = MathSin(p * 1.1) * (h * 0.14) + MathCos(p * 0.6) * (h * 0.08);
+            py = (int)(y1 + 8 + (progress * (h - 22)) + wave);
          }
-         if(py < y1 + 4) py = y1 + 4;
+         if(py < y1 + 3) py = y1 + 3;
          if(py > y2 - 4) py = y2 - 4;
 
-         // Fill vertical slice under line
+         // Shaded area fill underneath the curve
          for(int fy = py; fy < y2 - 2; fy++)
          {
-            m_canvas.PixelSet(px, fy, fillCol);
+            for(int fx = MathMax(x1, px - 2); fx <= px; fx++)
+            {
+               m_canvas.PixelSet(fx, fy, fillCol);
+            }
          }
-         m_canvas.Line(prevX, prevY, px, py, lineCol);
+
+         if(p > 0)
+         {
+            m_canvas.Line(prevX, prevY, px, py, lineCol);
+            m_canvas.Line(prevX, prevY + 1, px, py + 1, lineCol); // 2px thickness
+         }
          prevX = px;
          prevY = py;
       }
@@ -348,30 +359,31 @@ public:
       // ====================================================================
       // EXACT COLOR PALETTE MATCHING USER REFERENCE IMAGE
       // ====================================================================
-      uint colPageBg     = ColorToARGB(0xEAEFF2, 255); // #EAEFF2 Subtle Metallic Soft Gray
-      uint colCardBg     = ColorToARGB(0xFFFFFF, 255); // #FFFFFF Pure White
-      uint colInnerBg    = ColorToARGB(0xF1F5F9, 255); // #F1F5F9 Soft Slate Module Box
-      uint colBorder     = ColorToARGB(0xCBD5E1, 255); // #CBD5E1 Border
-      uint colInnerBrd   = ColorToARGB(0xE2E8F0, 255); // #E2E8F0 Inner Module Border
+      // Direct ARGB (AARRGGBB) Tokens - Fixes MQL5 ColorToARGB byte reversal
+      uint colPageBg     = 0xFFEAEFF2; // #EAEFF2 Subtle Metallic Soft Gray
+      uint colCardBg     = 0xFFFFFFFF; // #FFFFFF Pure White
+      uint colInnerBg    = 0xFFF1F5F9; // #F1F5F9 Soft Slate Module Box
+      uint colBorder     = 0xFFCBD5E1; // #CBD5E1 Border
+      uint colInnerBrd   = 0xFFE2E8F0; // #E2E8F0 Inner Module Border
 
-      uint colTextBlack  = ColorToARGB(0x0F172A, 255); // Jet Black Slate 900
-      uint colTextMuted  = ColorToARGB(0x475569, 255); // Slate 600
-      uint colTextSubtle = ColorToARGB(0x64748B, 255); // Slate 500
+      uint colTextBlack  = 0xFF0F172A; // Jet Black Slate 900
+      uint colTextMuted  = 0xFF475569; // Slate 600
+      uint colTextSubtle = 0xFF64748B; // Slate 500
 
-      // Semantic Green (Bullish) & Red (Bearish)
-      uint colBullGreen  = ColorToARGB(0x10B981, 255); // Emerald Green 500 (#10B981)
-      uint colBullDark   = ColorToARGB(0x059669, 255); // Emerald Dark 600 (#059669)
-      uint colBullLight  = ColorToARGB(0xD1FAE5, 255); // Emerald Light 100 (#D1FAE5)
+      // Semantic Green (Bullish) & Red (Bearish) - Verified Pure RGB
+      uint colBullGreen  = 0xFF10B981; // Emerald Green 500 (#10B981)
+      uint colBullDark   = 0xFF059669; // Emerald Dark 600 (#059669)
+      uint colBullLight  = 0xFFD1FAE5; // Emerald Light 100 (#D1FAE5)
 
-      uint colBearRed    = ColorToARGB(0xEF4444, 255); // Crimson Red 500 (#EF4444)
-      uint colBearDark   = ColorToARGB(0xDC2626, 255); // Crimson Dark 600 (#DC2626)
-      uint colBearLight  = ColorToARGB(0xFEE2E2, 255); // Red Light 100 (#FEE2E2)
+      uint colBearRed    = 0xFFEF4444; // Crimson Red 500 (#EF4444)
+      uint colBearDark   = 0xFFDC2626; // Crimson Dark 600 (#DC2626)
+      uint colBearLight  = 0xFFFEE2E2; // Red Light 100 (#FEE2E2)
 
-      uint colPillText   = ColorToARGB(0xFFFFFF, 255); // White text inside colored pill
-      uint colAmberBg    = ColorToARGB(0xFBBF24, 255); // Amber Badge (#FBBF24)
-      uint colAmberTxt   = ColorToARGB(0x78350F, 255); // Dark Amber text (#78350F)
-      uint colChipGray   = ColorToARGB(0xE2E8F0, 255); // Session Chip (#E2E8F0)
-      uint colTrackBg    = ColorToARGB(0xD5DFE6, 255); // Gauge / Bar Track
+      uint colPillText   = 0xFFFFFFFF; // White text inside colored pill
+      uint colAmberBg    = 0xFFFBBF24; // Amber Badge (#FBBF24)
+      uint colAmberTxt   = 0xFF78350F; // Dark Amber text (#78350F)
+      uint colChipGray   = 0xFFE2E8F0; // Session Chip (#E2E8F0)
+      uint colTrackBg    = 0xFFD5DFE6; // Gauge / Bar Track
 
       m_canvas.Erase(colPageBg);
 
