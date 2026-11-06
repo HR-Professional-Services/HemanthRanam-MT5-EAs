@@ -136,333 +136,190 @@ public:
 
    // ------------------------------------------------------------------
 
-   static void ComputeAPlusSetup(string symbol, int h_e200_h1, InstrumentQuantAnalytics &out)
-
+      static void ComputeAPlusSetup(string symbol, int h_e200_h1, InstrumentQuantAnalytics &out)
    {
-
       // 1. Check 1H 200 bias: Close > H1 EMA200 -> LONG ONLY; Close < H1 EMA200 -> SHORT ONLY
-
       double h1_200_val[];
-
       ArraySetAsSeries(h1_200_val, true);
-
       bool longOnly  = false;
-
       bool shortOnly = false;
-
+      out.h1_ema200_val = 0.0;
       if(CopyBuffer(h_e200_h1, 0, 0, 1, h1_200_val) > 0 && h1_200_val[0] > 0)
-
       {
-
+         out.h1_ema200_val = h1_200_val[0];
          longOnly  = (out.currentPrice > h1_200_val[0]);
-
          shortOnly = (out.currentPrice < h1_200_val[0]);
-
       }
-
       else
-
       {
-
          // Resilient fallback to overall H1 state
-
+         out.h1_ema200_val = out.ema200_m5;
          longOnly  = (out.h1EmaState == "BULLISH");
-
          shortOnly = (out.h1EmaState == "BEARISH");
-
       }
 
-
+      if(shortOnly)
+         out.h1_filter_badge = "1H: BELOW 200 = SHORT ONLY";
+      else if(longOnly)
+         out.h1_filter_badge = "1H: ABOVE 200 = LONG ONLY";
+      else
+         out.h1_filter_badge = "1H: 200 NEUTRAL";
 
       // 2. Check M5 alignment: ema9 < ema21 < ema200 = Bearish, ema9 > ema21 > ema200 = Bullish
-
       bool m5BearAligned = (out.ema9_m5 < out.ema21_m5 && out.ema21_m5 < out.ema200_m5);
-
       bool m5BullAligned = (out.ema9_m5 > out.ema21_m5 && out.ema21_m5 > out.ema200_m5);
 
-
-
-      // 3. Check 3-bar slope of EMA 9
-
-      double e9_hist[];
-
-      ArraySetAsSeries(e9_hist, true);
-
+      // 3. Check 3-bar slope of EMA 9 & set slope arrows
       bool slopeDown = false;
-
       bool slopeUp   = false;
-
       if(ArraySize(out.ema9_history) >= 3)
-
       {
-
          slopeDown = (out.ema9_history[0] < out.ema9_history[1] && out.ema9_history[1] < out.ema9_history[2]);
-
          slopeUp   = (out.ema9_history[0] > out.ema9_history[1] && out.ema9_history[1] > out.ema9_history[2]);
-
       }
 
-
+      if(slopeDown)
+         out.m5_slope_arrows = "\x2193\x2193\x2193"; // vvv
+      else if(slopeUp)
+         out.m5_slope_arrows = "\x2191\x2191\x2191"; // ^^^
+      else
+         out.m5_slope_arrows = "\x2194\x2194\x2194"; // <->
 
       // 4. Check Pullback TOUCH in last 5 bars: low <= ema21 <= high
-
       MqlRates rates5[];
-
       ArraySetAsSeries(rates5, true);
-
       bool hasTouch  = false;
-
       bool hasRetest = false;
-
       bool hasClose  = false;
+      bool atrGapSkip = false;
 
-
+      double pt = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      if(pt <= 0.0) pt = 0.01;
+      double atr = (out.atr14 > 0 ? out.atr14 : 10.0 * pt);
 
       if(CopyRates(symbol, PERIOD_M5, 0, 6, rates5) >= 5)
-
       {
-
          for(int k = 1; k <= 5; k++)
-
          {
-
             if(rates5[k].low <= out.ema21_m5 && rates5[k].high >= out.ema21_m5)
-
             {
-
                hasTouch = true;
-
                break;
-
             }
-
          }
-
-         // Retest condition: current or previous bar tests within EMA 9-21 corridor
-
+         // Retest condition: rejection wick or test within EMA 9-21 corridor
          double corridorTop = MathMax(out.ema9_m5, out.ema21_m5);
-
          double corridorBot = MathMin(out.ema9_m5, out.ema21_m5);
-
          hasRetest = (rates5[0].high >= corridorBot && rates5[0].low <= corridorTop);
 
+         // Directional engulfing close confirmation beyond retest
+         if(shortOnly && rates5[0].close < rates5[0].open && rates5[0].close < rates5[1].low) hasClose = true;
+         else if(shortOnly && rates5[0].close < rates5[0].open) hasClose = true;
 
+         if(longOnly  && rates5[0].close > rates5[0].open && rates5[0].close > rates5[1].high) hasClose = true;
+         else if(longOnly  && rates5[0].close > rates5[0].open) hasClose = true;
 
-         // Directional close confirmation
-
-         if(shortOnly && rates5[0].close < rates5[0].open) hasClose = true;
-
-         if(longOnly  && rates5[0].close > rates5[0].open) hasClose = true;
-
+         // ATR Gap Filter: If current 5M candle range > ATR(14) -> GAP SKIP
+         double candleRange = MathAbs(rates5[0].high - rates5[0].low);
+         if(candleRange > (1.2 * atr))
+            atrGapSkip = true;
       }
-
       else
-
       {
-
          hasTouch  = true;
-
          hasRetest = true;
-
          hasClose  = false;
-
       }
 
+      out.stepTouch    = hasTouch;
+      out.stepRetest   = hasRetest;
+      out.stepClose    = hasClose;
+      out.atr_gap_skip = atrGapSkip;
 
-
-      out.stepTouch  = hasTouch;
-
-      out.stepRetest = hasRetest;
-
-      out.stepClose  = hasClose;
-
-
-
-      // Evaluate A+ Readiness
-
-      bool sellReady = (shortOnly && m5BearAligned && slopeDown && hasTouch);
-
-      bool buyReady  = (longOnly  && m5BullAligned && slopeUp   && hasTouch);
-
-
+      // Evaluate A+ Readiness: 1H filter + M5 alignment + slope + touch
+      bool sellReady = (shortOnly && m5BearAligned && slopeDown && hasTouch && !atrGapSkip);
+      bool buyReady  = (longOnly  && m5BullAligned && slopeUp   && hasTouch && !atrGapSkip);
 
       out.isAPlusReady = (sellReady || buyReady);
 
-
-
       if(sellReady)
-
       {
-
          out.signalText   = "SELL READY 85%";
-
          out.signalPillBg = 0xFFEF4444; // Red
-
       }
-
       else if(buyReady)
-
       {
-
          out.signalText   = "BUY READY 85%";
-
          out.signalPillBg = 0xFF10B981; // Green
-
       }
-
       else
-
       {
-
          out.signalText   = "WAIT 40%";
-
          out.signalPillBg = 0xFFF59E0B; // Amber
-
       }
-
-
 
       // Calculate Entry, Stop, TP, and Lot Size
-
-      double atr = (out.atr14 > 0 ? out.atr14 : 10.0 * SymbolInfoDouble(symbol, SYMBOL_POINT));
-
-      double pt  = SymbolInfoDouble(symbol, SYMBOL_POINT);
-
-      if(pt <= 0.0) pt = 0.01;
-
-
-
       out.calcEntry = out.currentPrice;
 
-
-
       if(sellReady)
-
       {
-
          double swingHigh = (out.lastSwingHigh > out.currentPrice ? out.lastSwingHigh : out.currentPrice + atr);
-
          out.calcStop = swingHigh + (0.2 * atr);
-
          double stopDist = MathAbs(out.calcStop - out.calcEntry);
-
          if(stopDist <= pt) stopDist = atr;
-
          out.calcTP = out.calcEntry - (1.5 * stopDist);
-
       }
-
       else if(buyReady)
-
       {
-
          double swingLow = (out.lastSwingLow > 0 && out.lastSwingLow < out.currentPrice ? out.lastSwingLow : out.currentPrice - atr);
-
          out.calcStop = swingLow - (0.2 * atr);
-
          double stopDist = MathAbs(out.calcEntry - out.calcStop);
-
          if(stopDist <= pt) stopDist = atr;
-
          out.calcTP = out.calcEntry + (1.5 * stopDist);
-
       }
-
       else
-
       {
-
-         // Wait mode benchmark levels based on 1:1.5 RR
-
-         double stopDist = (atr > 0 ? atr : 20.0 * pt);
-
+         // Wait mode benchmark levels based on 1:1.5 RR (Stop = 0.2 ATR beyond local level)
+         double stopDist = (atr > 0 ? (0.8 * atr) : 20.0 * pt);
          out.calcStop = out.calcEntry + (shortOnly ? stopDist : -stopDist);
-
          out.calcTP   = out.calcEntry + (shortOnly ? -1.5 * stopDist : 1.5 * stopDist);
-
       }
-
-
 
       // Lot Calculation (Strict 1% Equity/Balance Risk)
-
       double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-
       if(balance <= 0) balance = 10000.0;
-
       double riskUSD = balance * 0.01; // 1% risk
-
       out.riskAmountUSD = riskUSD;
-
       out.rewardRiskRatio = 1.5;
 
-
-
       double stopDistance = MathAbs(out.calcEntry - out.calcStop);
-
-      double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-
-      if(contractSize <= 0) contractSize = 100.0;
-
-
-
+      double stopPts = (pt > 0.0) ? (stopDistance / pt) : (stopDistance * 100.0);
       double tickVal = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
 
-      double tickSize= SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-
-      if(tickSize <= 0) tickSize = pt;
-
-
-
-      // V4.2 Fixed Lot Size Calculation based on 1% Risk & Stop Loss distance in points
-      double lotCalc = 0.20;
-      double stopPts = (pt > 0.0) ? (stopDistance / pt) : (stopDistance * 100.0);
-      
-      // Calculate loss per 1.00 standard lot
-      double lossPerLot = 0.0;
-      if(tickVal > 0.0 && tickSize > 0.0 && stopDistance > 0.0)
+      double lotCalc = 0.24;
+      if(stopPts > 0.0 && tickVal > 0.0)
       {
-         lossPerLot = (stopDistance / tickSize) * tickVal;
+         lotCalc = riskUSD / (stopPts * tickVal);
       }
-      else if(contractSize > 0.0 && stopDistance > 0.0)
+      else if(stopDistance > 0.0)
       {
-         lossPerLot = stopDistance * contractSize;
-      }
-      
-      if(lossPerLot > 0.0)
-      {
-         lotCalc = riskUSD / lossPerLot;
-      }
-      else if(stopPts > 0.0)
-      {
-         lotCalc = riskUSD / (stopPts * 1.0);
+         double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+         if(contractSize <= 0) contractSize = 100.0;
+         lotCalc = riskUSD / (stopDistance * contractSize);
       }
 
-      // Clamp lot size to broker min/max/step
-
+      // Clamp lot size to broker min 0.01, max 5.00, 2 decimals
       double minLot  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-
       double maxLot  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-
       double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-
       if(minLot <= 0) minLot = 0.01;
-
-      if(maxLot <= 0) maxLot = 100.0;
-
+      if(maxLot <= 0 || maxLot > 5.0) maxLot = 5.00;
       if(stepLot <= 0) stepLot = 0.01;
 
-
-
       lotCalc = MathFloor(lotCalc / stepLot) * stepLot;
-
       if(lotCalc < minLot) lotCalc = minLot;
-
       if(lotCalc > maxLot) lotCalc = maxLot;
-
-      out.calcLot = lotCalc;
-
+      out.calcLot = NormalizeDouble(lotCalc, 2);
    }
-
 };
 

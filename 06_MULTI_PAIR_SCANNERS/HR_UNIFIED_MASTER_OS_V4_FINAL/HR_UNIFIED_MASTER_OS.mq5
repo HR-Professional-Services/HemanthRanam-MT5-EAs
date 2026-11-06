@@ -344,10 +344,10 @@ void VerifyAllLinked()
       }
       else
       {
-         PrintFormat("VERIFY OK: %s Price=%.2f (%.2f%%) | %s | Stop=%.2f TP=%.2f Lot=%.2f | M5=%s RSI=%.1f",
-                     g_baseNames[i], topPrice, topPct,
-                     g_quantData[i].signalText, g_quantData[i].calcStop, g_quantData[i].calcTP, g_quantData[i].calcLot,
-                     g_quantData[i].m5EmaState, g_quantData[i].rsi14);
+      PrintFormat("9/21 VERIFY %s Touch=%d Retest=%d Close=%d Signal=%s Entry=%.2f Stop=%.2f Lot=%.2f 1H=%s Gap=%s",
+                  g_baseNames[i], (int)g_quantData[i].stepTouch, (int)g_quantData[i].stepRetest, (int)g_quantData[i].stepClose,
+                  g_quantData[i].signalText, g_quantData[i].calcEntry, g_quantData[i].calcStop,
+                  g_quantData[i].calcLot, g_quantData[i].h1_filter_badge, (g_quantData[i].atr_gap_skip ? "SKIP" : "OK"));
       }
    }
 }
