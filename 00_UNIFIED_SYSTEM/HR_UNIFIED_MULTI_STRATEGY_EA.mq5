@@ -424,7 +424,7 @@ public:
          uint priceCol = colTextMuted;
          if(data[i].currentPrice > 0.0)
          {
-            string arrow = (data[i].priceChangePct >= 0.0) ? "▲ " : "▼ ";
+            string arrow = (data[i].priceChangePct >= 0.0) ? "^ " : "v ";
             priceStr = arrow + StringFormat("%.2f (%+.2f%%)", data[i].currentPrice, data[i].priceChangePct);
             priceCol = (data[i].priceChangePct >= 0.0) ? colBullGreen : colBearRed;
          }
@@ -476,10 +476,14 @@ public:
             emaLine = "9: -- | 21: -- | 200: --";
          m_canvas.TextOut(c1_x1 + 12, r1_y1 + 30, emaLine, colTextBlack);
 
-         m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
-         uint emaCol = (data[i].m5EmaState == "BULLISH" ? colBullGreen : (data[i].m5EmaState == "BEARISH" ? colBearRed : colAmber));
-         string stateLine = StringFormat("ALIGN: %s  |  SPREAD: %.2f%%", data[i].m5EmaState, data[i].emaSeparationPct);
-         m_canvas.TextOut(c1_x1 + 12, r1_y1 + 52, stateLine, emaCol);
+         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
+         string alignText = (data[i].m5EmaState == "BULLISH" ? "^ ALIGN BULLISH" : (data[i].m5EmaState == "BEARISH" ? "v ALIGN BEARISH" : "- ALIGN NEUTRAL"));
+         uint aBg = (data[i].m5EmaState == "BULLISH" ? colBullBg : (data[i].m5EmaState == "BEARISH" ? colBearBg : colMutedBg));
+         uint aBrd = (data[i].m5EmaState == "BULLISH" ? colBullBrd : (data[i].m5EmaState == "BEARISH" ? colBearBrd : colMutedBrd));
+         uint aTxt = (data[i].m5EmaState == "BULLISH" ? colBullGreen : (data[i].m5EmaState == "BEARISH" ? colBearRed : colTextMuted));
+         DrawBadge(c1_x1 + 12, r1_y1 + 50, 130, 22, alignText, aBg, aBrd, aTxt);
+         string spreadLine = StringFormat("SPREAD: %.2f%%", data[i].emaSeparationPct);
+         m_canvas.TextOut(c1_x1 + 150, r1_y1 + 53, spreadLine, colTextMuted);
 
          // =================================================================
          // BOX 2 (R1C2): ICT / SMC MARKET STRUCTURE & ZONES
@@ -496,7 +500,7 @@ public:
          m_canvas.TextOut(c2_x1 + 12, r1_y1 + 30, structStr, bosCol);
 
          m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
-         uint zoneCol = (StringFind(data[i].smcZone, "DISCOUNT") >= 0 ? colBullGreen : (StringFind(data[i].smcZone, "PREMIUM") >= 0 ? colBearRed : colAccentBlue));
+         uint zoneCol = (StringFind(data[i].smcZone, "DISCOUNT") >= 0 ? colBullGreen : (StringFind(data[i].smcZone, "PREMIUM") >= 0 ? colBearRed : colAmber));
          m_canvas.TextOut(c2_x1 + 12, r1_y1 + 52, "ZONE: " + data[i].smcZone, zoneCol);
 
          // =================================================================
@@ -526,14 +530,14 @@ public:
             uint bBg, bBrd, bTxt;
             if(tfStates[j] == "BULLISH")
             {
-               lbl = tfs[j] + " ▲ BULL";
+               lbl = tfs[j] + " ^ BULL";
                bBg = colBullBg;
                bBrd = colBullBrd;
                bTxt = colBullGreen;
             }
             else if(tfStates[j] == "BEARISH")
             {
-               lbl = tfs[j] + " ▼ BEAR";
+               lbl = tfs[j] + " v BEAR";
                bBg = colBearBg;
                bBrd = colBearBrd;
                bTxt = colBearRed;
@@ -689,7 +693,7 @@ public:
          {
             if(data[s].currentPrice > 0.0)
             {
-               string arrow = (data[s].priceChangePct >= 0.0 ? "▲ " : "▼ ");
+               string arrow = (data[s].priceChangePct >= 0.0 ? "^ " : "v ");
                string pStr = arrow + StringFormat("%.2f (%+.2f%%)", data[s].currentPrice, data[s].priceChangePct);
                uint cCol = (data[s].priceChangePct >= 0.0 ? colBullGreen : colBearRed);
                m_canvas.TextOut(bx1 + 12, barY + 28, pStr, cCol);
