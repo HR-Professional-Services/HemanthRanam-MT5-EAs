@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     HR_UNIFIED_MASTER_OS.mq5     |
-//| V4 FINAL LOCK - KEEP EXISTING FORMAT - 2026-05-06                |
-//| Premium Digital 44px - Verified Linked - 24/7 - Flicker Added    |
+//| V4.1 FINAL UPGRADE - 9-21-200 SCALPER ENGINE & RISK MANAGER     |
+//| Keep Existing Format - Same Structure - A+ Signal + Killzones    |
 //| Copyright 2026, Hemanth Ranam                                    |
 //+------------------------------------------------------------------+
 #property copyright   "Copyright 2026, Hemanth Ranam"
 #property link        "https://scalenovasys.com"
-#property version     "4.00"
+#property version     "4.10"
 #property description "HR BLOOMBERG QUANT TERMINAL - Institutional Scalper Radar & Master Market OS"
 #property strict
 
@@ -44,6 +44,12 @@ input double          InpMaxTotalRisk = 5.0;    // Max Aggregate Open Risk (%)
 input int             InpMaxPositions = 4;      // Max Open Concurrent Positions
 input ulong           InpMagicNumber  = 27963094; // System Magic Number
 
+input group "=== Audio & Telegram Alerts ==="
+input bool            InpEnableAudioAlert = true;  // Play audio on A+ Signal
+input bool            InpUseTelegram      = false; // WebRequest to Telegram Bot
+input string          InpTelegramBotToken = "";    // Telegram Bot Token
+input string          InpTelegramChatID   = "";    // Telegram Chat ID
+
 //+------------------------------------------------------------------+
 //| GLOBAL SYSTEM INSTANCES                                          |
 //+------------------------------------------------------------------+
@@ -63,8 +69,18 @@ int                       h_ema21[NUM_INSTRUMENTS];
 int                       h_ema200[NUM_INSTRUMENTS];
 int                       h_ema9_h1[NUM_INSTRUMENTS];
 int                       h_ema21_h1[NUM_INSTRUMENTS];
+int                       h_ema200_h1[NUM_INSTRUMENTS];
 int                       h_rsi[NUM_INSTRUMENTS];
 int                       h_atr[NUM_INSTRUMENTS];
+
+// Live Risk & Account Watchdog State
+double                    g_startOfDayBalance   = 0.0;
+double                    g_liveDailyDrawdownPct= 0.0;
+double                    g_liveOpenRiskPct     = 0.0;
+int                       g_liveOpenPositions   = 0;
+
+// Alert Memory State
+string                    g_prevSignalText[NUM_INSTRUMENTS];
 
 // 24/7 Watchdog Tracking
 int                       g_consecutiveErrors = 0;
@@ -107,17 +123,18 @@ bool InitHandlesWithRetry(int idx, string sym)
 {
    for(int attempt = 1; attempt <= 3; attempt++)
    {
-      h_ema9[idx]     = iMA(sym, InpMainTF, InpEmaFast, 0, MODE_EMA, PRICE_CLOSE);
-      h_ema21[idx]    = iMA(sym, InpMainTF, InpEmaMid,  0, MODE_EMA, PRICE_CLOSE);
-      h_ema200[idx]   = iMA(sym, InpMainTF, InpEmaSlow, 0, MODE_EMA, PRICE_CLOSE);
-      h_ema9_h1[idx]  = iMA(sym, InpHtfTF,  InpEmaFast, 0, MODE_EMA, PRICE_CLOSE);
-      h_ema21_h1[idx] = iMA(sym, InpHtfTF,  InpEmaMid,  0, MODE_EMA, PRICE_CLOSE);
-      h_rsi[idx]      = iRSI(sym, InpMainTF, InpRsiPeriod, PRICE_CLOSE);
-      h_atr[idx]      = iATR(sym, InpMainTF, InpAtrPeriod);
+      h_ema9[idx]      = iMA(sym, InpMainTF, InpEmaFast, 0, MODE_EMA, PRICE_CLOSE);
+      h_ema21[idx]     = iMA(sym, InpMainTF, InpEmaMid,  0, MODE_EMA, PRICE_CLOSE);
+      h_ema200[idx]    = iMA(sym, InpMainTF, InpEmaSlow, 0, MODE_EMA, PRICE_CLOSE);
+      h_ema9_h1[idx]   = iMA(sym, InpHtfTF,  InpEmaFast, 0, MODE_EMA, PRICE_CLOSE);
+      h_ema21_h1[idx]  = iMA(sym, InpHtfTF,  InpEmaMid,  0, MODE_EMA, PRICE_CLOSE);
+      h_ema200_h1[idx] = iMA(sym, InpHtfTF,  InpEmaSlow, 0, MODE_EMA, PRICE_CLOSE);
+      h_rsi[idx]       = iRSI(sym, InpMainTF, InpRsiPeriod, PRICE_CLOSE);
+      h_atr[idx]       = iATR(sym, InpMainTF, InpAtrPeriod);
 
       if(h_ema9[idx] != INVALID_HANDLE && h_ema21[idx] != INVALID_HANDLE &&
          h_ema200[idx] != INVALID_HANDLE && h_ema9_h1[idx] != INVALID_HANDLE &&
-         h_ema21_h1[idx] != INVALID_HANDLE &&
+         h_ema21_h1[idx] != INVALID_HANDLE && h_ema200_h1[idx] != INVALID_HANDLE &&
          h_rsi[idx] != INVALID_HANDLE && h_atr[idx] != INVALID_HANDLE)
       {
          return true;
@@ -130,40 +147,136 @@ bool InitHandlesWithRetry(int idx, string sym)
 }
 
 //+------------------------------------------------------------------+
-//| Update Multi-Session Clock & Timezone Intelligence               |
+//| Update Multi-Session Clock & Killzones Auto-Detection            |
 //+------------------------------------------------------------------+
 void UpdateSessionClock()
 {
    datetime srvTime = TimeCurrent();
-   MqlDateTime dt;
-   TimeToStruct(srvTime, dt);
+   datetime gmtTime = TimeGMT();
+   MqlDateTime dtGMT;
+   TimeToStruct(gmtTime, dtGMT);
 
-   // Server Time to UK & NY estimation
-   g_sessionIntel.ukTime = srvTime - 2 * 3600;
-   g_sessionIntel.nyTime = srvTime - 7 * 3600;
+   g_sessionIntel.ukTime = gmtTime;          // GMT / UK standard
+   g_sessionIntel.nyTime = gmtTime - 5 * 3600; // EST
 
-   int hour = dt.hour;
-   if(hour >= 0 && hour < 8)
+   int h = dtGMT.hour;
+   int m = dtGMT.min;
+   int timeInMin = (h * 60) + m;
+
+   // Session Rules:
+   // 00:00 - 07:00 GMT -> ASIA
+   // 08:00 - 11:30 GMT -> LONDON (PRIME 08:30-11:30)
+   // 13:30 - 16:30 GMT -> NY (PRIME 13:45-16:30)
+   // 11:45-12:30 or 13:15-13:45 GMT -> BLOCK - NO TRADE
+   if((timeInMin >= 11*60+45 && timeInMin <= 12*60+30) ||
+      (timeInMin >= 13*60+15 && timeInMin <= 13*60+45))
    {
-      g_sessionIntel.activeSessionName = "ASIAN";
+      g_sessionIntel.activeSessionName = "BLOCK";
+   }
+   else if(timeInMin >= 0 && timeInMin < 7*60)
+   {
+      g_sessionIntel.activeSessionName = "ASIA";
       g_sessionIntel.inAsian = true;
    }
-   else if(hour >= 8 && hour < 13)
+   else if(timeInMin >= 8*60 && timeInMin <= 11*60+30)
    {
       g_sessionIntel.activeSessionName = "LONDON";
       g_sessionIntel.inLondon = true;
    }
-   else if(hour >= 13 && hour < 17)
+   else if(timeInMin >= 13*60+30 && timeInMin <= 16*60+30)
    {
       g_sessionIntel.activeSessionName = "NY";
       g_sessionIntel.inNewYork = true;
-      g_sessionIntel.inOverlap = true;
    }
    else
    {
-      g_sessionIntel.activeSessionName = "NY";
-      g_sessionIntel.inNewYork = true;
+      g_sessionIntel.activeSessionName = "INTER-SESSION";
    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Real-Time Account Risk & Drawdown                      |
+//+------------------------------------------------------------------+
+void UpdateRiskMetrics()
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   if(g_startOfDayBalance <= 0.0)
+      g_startOfDayBalance = balance;
+
+   // Daily Drawdown %
+   if(g_startOfDayBalance > 0.0)
+      g_liveDailyDrawdownPct = ((equity - g_startOfDayBalance) / g_startOfDayBalance) * 100.0;
+   else
+      g_liveDailyDrawdownPct = 0.0;
+
+   // Calculate Aggregate Open Risk from all active positions stop distance
+   int totalPos = PositionsTotal();
+   g_liveOpenPositions = totalPos;
+   double totalRiskUSD = 0.0;
+
+   for(int p = totalPos - 1; p >= 0; p--)
+   {
+      ulong ticket = PositionGetTicket(p);
+      if(ticket > 0 && PositionSelectByTicket(ticket))
+      {
+         double posVol   = PositionGetDouble(POSITION_VOLUME);
+         double posPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         double posSL    = PositionGetDouble(POSITION_SL);
+         string posSym   = PositionGetString(POSITION_SYMBOL);
+
+         if(posSL > 0)
+         {
+            double dist = MathAbs(posPrice - posSL);
+            double tickVal  = SymbolInfoDouble(posSym, SYMBOL_TRADE_TICK_VALUE);
+            double tickSize = SymbolInfoDouble(posSym, SYMBOL_TRADE_TICK_SIZE);
+            if(tickSize <= 0) tickSize = SymbolInfoDouble(posSym, SYMBOL_POINT);
+
+            if(tickSize > 0 && tickVal > 0)
+               totalRiskUSD += (dist / tickSize) * tickVal * (posVol / SymbolInfoDouble(posSym, SYMBOL_VOLUME_MIN));
+         }
+      }
+   }
+
+   if(balance > 0.0)
+      g_liveOpenRiskPct = (totalRiskUSD / balance) * 100.0;
+   else
+      g_liveOpenRiskPct = 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Trigger Audio, Print & Telegram Alerts                           |
+//+------------------------------------------------------------------+
+void TriggerSignalAlert(int idx, string newSig)
+{
+   if(g_prevSignalText[idx] != "" && g_prevSignalText[idx] != newSig)
+   {
+      // If transitioned from WAIT to BUY READY or SELL READY
+      if(StringFind(g_prevSignalText[idx], "WAIT") >= 0 &&
+        (StringFind(newSig, "SELL READY") >= 0 || StringFind(newSig, "BUY READY") >= 0))
+      {
+         string msg = StringFormat("ALERT: %s %s @ %.2f | H1 %s 200 | M5 %s",
+                                   g_baseNames[idx], newSig, g_quantData[idx].currentPrice,
+                                   (g_quantData[idx].currentPrice > g_quantData[idx].ema200_m5 ? "ABOVE" : "BELOW"),
+                                   g_quantData[idx].m5EmaState);
+         Print(msg);
+
+         if(InpEnableAudioAlert)
+            PlaySound("alert.wav");
+
+         // Optional Telegram webhook
+         if(InpUseTelegram && InpTelegramBotToken != "" && InpTelegramChatID != "")
+         {
+            string url = "https://api.telegram.org/bot" + InpTelegramBotToken + "/sendMessage?chat_id=" + InpTelegramChatID + "&text=" + msg;
+            char postData[];
+            char resultData[];
+            string headers;
+            WebRequest("GET", url, "", 3000, postData, resultData, headers);
+         }
+      }
+   }
+   g_prevSignalText[idx] = newSig;
 }
 
 //+------------------------------------------------------------------+
@@ -172,6 +285,7 @@ void UpdateSessionClock()
 void UpdateAllAnalytics()
 {
    UpdateSessionClock();
+   UpdateRiskMetrics();
 
    for(int i = 0; i < NUM_INSTRUMENTS; i++)
    {
@@ -198,6 +312,12 @@ void UpdateAllAnalytics()
       CHR_EMA_Engine::ComputeEMAs(sym, h_ema9[i], h_ema21[i], h_ema200[i], h_ema9_h1[i], h_ema21_h1[i], g_quantData[i]);
       CHR_ICT_SMC::ComputeStructureAndLiquidity(sym, g_quantData[i]);
       CHR_Indicators::ComputeMomentum(sym, h_atr[i], h_rsi[i], g_quantData[i]);
+
+      // Calculate A+ 9-21-200 Scalper Engine Levels & Signals
+      CHR_EMA_Engine::ComputeAPlusSetup(sym, h_ema200_h1[i], g_quantData[i]);
+
+      // Check Alert Transitions
+      TriggerSignalAlert(i, g_quantData[i].signalText);
    }
 
    CHR_Macro::ComputeMacroAndDXY(g_dxyPrice, g_dxyChange);
@@ -224,10 +344,10 @@ void VerifyAllLinked()
       }
       else
       {
-         PrintFormat("VERIFY OK: %s Price Top=%.2f Price Bottom=%.2f Pct=%.2f%% M5=%s H1=%s RSI=%.1f BSL=%.1f SSL=%.1f",
-                     g_baseNames[i], topPrice, bottomPrice, topPct,
-                     g_quantData[i].m5EmaState, g_quantData[i].h1EmaState,
-                     g_quantData[i].rsi14, g_quantData[i].nearestBSL, g_quantData[i].nearestSSL);
+         PrintFormat("VERIFY OK: %s Price=%.2f (%.2f%%) | %s | Stop=%.2f TP=%.2f Lot=%.2f | M5=%s RSI=%.1f",
+                     g_baseNames[i], topPrice, topPct,
+                     g_quantData[i].signalText, g_quantData[i].calcStop, g_quantData[i].calcTP, g_quantData[i].calcLot,
+                     g_quantData[i].m5EmaState, g_quantData[i].rsi14);
       }
    }
 }
@@ -246,6 +366,7 @@ void CheckWatchdog()
    {
       Print("[HR_WATCHDOG] 00:05 Server Time Daily Reset triggered. Resetting timers & recalculating...");
       g_lastDailyRefresh = now;
+      g_startOfDayBalance = AccountInfoDouble(ACCOUNT_BALANCE);
       EventKillTimer();
       EventSetMillisecondTimer(500);
       UpdateAllAnalytics();
@@ -275,7 +396,7 @@ void CheckWatchdog()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("[HR_UNIFIED] Starting HR UNIFIED MASTER OS V4 FINAL...");
+   Print("[HR_UNIFIED] Starting HR UNIFIED MASTER OS V4.1 FINAL UPGRADE...");
 
    string symList[];
    int count = StringSplit(InpSymbols, ',', symList);
@@ -290,18 +411,19 @@ int OnInit()
       {
          PrintFormat("[HR_UNIFIED][WARN] Could not initialize all handles for %s. Operating in resilient standby.", g_brokerSymbols[i]);
       }
+      g_prevSignalText[i] = "";
    }
 
    g_dxyResolved = ResolveBrokerSymbol(InpDxySymbol);
+   g_startOfDayBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
    UpdateAllAnalytics();
 
-   // Render Initial Terminal Frame
-   int openCount = PositionsTotal();
+   // Render Initial Terminal Frame with Live Risk & Killzone States
    m_bloombergTerm.RenderTerminal(
       TimeCurrent(), g_sessionIntel.ukTime, g_sessionIntel.activeSessionName,
-      0.00, InpMaxDailyDD, 0.00, InpMaxTotalRisk,
-      openCount, InpMaxPositions,
+      g_liveDailyDrawdownPct, InpMaxDailyDD, g_liveOpenRiskPct, InpMaxTotalRisk,
+      g_liveOpenPositions, InpMaxPositions,
       g_dxyPrice, g_dxyChange,
       g_sessionIntel,
       g_quantData
@@ -329,6 +451,7 @@ void OnDeinit(const int reason)
       IndicatorRelease(h_ema200[i]);
       IndicatorRelease(h_ema9_h1[i]);
       IndicatorRelease(h_ema21_h1[i]);
+      IndicatorRelease(h_ema200_h1[i]);
       IndicatorRelease(h_rsi[i]);
       IndicatorRelease(h_atr[i]);
    }
@@ -345,11 +468,10 @@ void OnTimer()
    // Periodic Telemetry calculation
    UpdateAllAnalytics();
 
-   int openCount = PositionsTotal();
    m_bloombergTerm.RenderTerminal(
       TimeCurrent(), g_sessionIntel.ukTime, g_sessionIntel.activeSessionName,
-      0.00, InpMaxDailyDD, 0.00, InpMaxTotalRisk,
-      openCount, InpMaxPositions,
+      g_liveDailyDrawdownPct, InpMaxDailyDD, g_liveOpenRiskPct, InpMaxTotalRisk,
+      g_liveOpenPositions, InpMaxPositions,
       g_dxyPrice, g_dxyChange,
       g_sessionIntel,
       g_quantData
@@ -372,11 +494,10 @@ void OnTick()
 {
    UpdateAllAnalytics();
 
-   int openCount = PositionsTotal();
    m_bloombergTerm.RenderTerminal(
       TimeCurrent(), g_sessionIntel.ukTime, g_sessionIntel.activeSessionName,
-      0.00, InpMaxDailyDD, 0.00, InpMaxTotalRisk,
-      openCount, InpMaxPositions,
+      g_liveDailyDrawdownPct, InpMaxDailyDD, g_liveOpenRiskPct, InpMaxTotalRisk,
+      g_liveOpenPositions, InpMaxPositions,
       g_dxyPrice, g_dxyChange,
       g_sessionIntel,
       g_quantData
@@ -390,11 +511,10 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 {
    if(id == CHARTEVENT_CHART_CHANGE)
    {
-      int openCount = PositionsTotal();
       m_bloombergTerm.RenderTerminal(
          TimeCurrent(), g_sessionIntel.ukTime, g_sessionIntel.activeSessionName,
-         0.00, InpMaxDailyDD, 0.00, InpMaxTotalRisk,
-         openCount, InpMaxPositions,
+         g_liveDailyDrawdownPct, InpMaxDailyDD, g_liveOpenRiskPct, InpMaxTotalRisk,
+         g_liveOpenPositions, InpMaxPositions,
          g_dxyPrice, g_dxyChange,
          g_sessionIntel,
          g_quantData

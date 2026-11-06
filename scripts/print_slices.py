@@ -1,0 +1,9 @@
+with open(r"C:\Users\vaibh\.gemini\antigravity-ide\scratch\HemanthRanam-MT5-EAs\06_MULTI_PAIR_SCANNERS\HR_UNIFIED_MASTER_OS_V4_FINAL\HR_Dashboard_Premium.mqh", "r", encoding="utf-8") as f:
+    lines = f.readlines()
+
+print("=== Lines 620-635 ===")
+print("".join(lines[619:635]))
+print("=== Lines 645-670 ===")
+print("".join(lines[644:670]))
+print("=== Lines 1095-1110 ===")
+print("".join(lines[1094:1110]))
