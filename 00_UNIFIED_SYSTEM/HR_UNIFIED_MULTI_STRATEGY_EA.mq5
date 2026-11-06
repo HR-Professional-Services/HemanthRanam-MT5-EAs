@@ -202,6 +202,10 @@ struct InstrumentQuantAnalytics
 //| CBloombergTerminal: Institutional CCanvas Graphics Engine         |
 //| AUTO-RESPONSIVE SINGLE-SCREEN FIT — ZERO OVERFLOW / ZERO CUTOFF   |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| CBloombergTerminal: Institutional CCanvas Graphics Engine         |
+//| V3 FINAL: DIGITAL WATCH NUMBERS 3-4x BIGGER + TRIBAL BOLD HEADINGS|
+//+------------------------------------------------------------------+
 class CBloombergTerminal
 {
 private:
@@ -211,17 +215,31 @@ private:
    int     m_height;
    string  m_canvasName;
 
-   // Helper: Draw a solid rounded-look pill/badge with scalable typography
-   void DrawPill(int x, int y, int w, int h, string text, uint bgCol, uint textCol, int fontSize = 13, bool isBold = true)
+   // Helper: Format number string with extra tracking/letter spacing for Digital LED look
+   string FormatDigitalSpacing(string val)
    {
-      m_canvas.FillRectangle(x + 2, y, x + w - 2, y + h, bgCol);
-      m_canvas.FillRectangle(x, y + 2, x + w, y + h - 2, bgCol);
-      m_canvas.FontSet("Segoe UI", fontSize, isBold ? FW_BOLD : FW_NORMAL);
-      int charWidth = (fontSize >= 15) ? 9 : 7;
+      string out = "";
+      int len = StringLen(val);
+      for(int i = 0; i < len; i++)
+      {
+         out += StringSubstr(val, i, 1);
+         if(i < len - 1 && StringSubstr(val, i, 1) != " ")
+            out += " ";
+      }
+      return out;
+   }
+
+   // Helper: Draw a solid rounded-look pill/badge with scalable typography
+   void DrawPill(int x, int y, int w, int h, string text, uint bgCol, uint textCol, int fontSize = 16, bool isBold = true)
+   {
+      m_canvas.FillRectangle(x + 3, y, x + w - 3, y + h, bgCol);
+      m_canvas.FillRectangle(x, y + 3, x + w, y + h - 3, bgCol);
+      m_canvas.FontSet("Segoe UI Black", fontSize, isBold ? FW_BLACK : FW_BOLD);
+      int charWidth = (fontSize >= 18) ? 11 : ((fontSize >= 15) ? 9 : 8);
       int textW = (int)StringLen(text) * charWidth;
       int tx = x + (w - textW) / 2;
-      if(tx < x + 3) tx = x + 3;
-      int ty = y + (h - (fontSize + 3)) / 2;
+      if(tx < x + 4) tx = x + 4;
+      int ty = y + (h - (fontSize + 4)) / 2;
       m_canvas.TextOut(tx, ty, text, textCol);
    }
 
@@ -232,14 +250,14 @@ private:
       m_canvas.Rectangle(x1, y1, x2, y2, brdCol);
    }
 
-   // Helper: Draw Speedometer Arc Gauge with needle for RSI
+   // Helper: Draw Speedometer Arc Gauge with needle and large digital readout for RSI
    void DrawSpeedometerGauge(int cx, int cy, int radius, double val, double minVal, double maxVal, uint colTrack, uint colGreen, uint colRed, uint colNeedle)
    {
       double clamped = MathMax(minVal, MathMin(maxVal, val));
       double pct = (clamped - minVal) / (maxVal - minVal); // 0.0 to 1.0
 
-      // Draw curved arc band (Red zone on left, Neutral track middle, Green zone on right)
-      for(int r = radius - 4; r <= radius + 2; r++)
+      // Draw thick 10px curved arc band
+      for(int r = radius - 7; r <= radius + 3; r++)
       {
          for(int a = 180; a <= 360; a += 1)
          {
@@ -248,25 +266,34 @@ private:
             int py = (int)(cy + r * MathSin(rad));
             
             uint arcColor = colTrack;
-            if(a <= 230)      arcColor = colRed;   // Left red zone (0-28%)
-            else if(a >= 310) arcColor = colGreen; // Right green zone (72-100%)
+            if(a <= 230)      arcColor = colRed;   // Left red oversold zone
+            else if(a >= 310) arcColor = colGreen; // Right green overbought zone
             
             m_canvas.PixelSet(px, py, arcColor);
          }
       }
 
-      // Draw Needle pointing to current value
+      // Draw Needle pointing to current value (3px thick)
       double needleAngle = 180.0 + (pct * 180.0);
       double needleRad = needleAngle * M_PI / 180.0;
-      int needleLen = radius - 2;
+      int needleLen = radius - 4;
       int nx = (int)(cx + needleLen * MathCos(needleRad));
       int ny = (int)(cy + needleLen * MathSin(needleRad));
       m_canvas.Line(cx, cy, nx, ny, colNeedle);
       m_canvas.Line(cx - 1, cy, nx - 1, ny, colNeedle);
-      m_canvas.FillCircle(cx, cy, 4, colNeedle);
+      m_canvas.Line(cx + 1, cy, nx + 1, ny, colNeedle);
+      m_canvas.FillCircle(cx, cy, 6, colNeedle);
+
+      // Large 24px Digital readout inside gauge
+      m_canvas.FontSet("Consolas", 24, FW_BOLD);
+      string rsiStr = StringFormat("%.1f", val);
+      int rw = (int)StringLen(rsiStr) * 14;
+      // Drop shadow glow
+      m_canvas.TextOut(cx - (rw / 2) + 1, cy - 36 + 1, rsiStr, 0x40000000);
+      m_canvas.TextOut(cx - (rw / 2), cy - 36, rsiStr, (val >= 70.0 ? colGreen : (val <= 30.0 ? colRed : 0xFF0F172A)));
    }
 
-   // Helper: Draw Trajectory Sparkline with Gradient Shaded Area
+   // Helper: Draw Trajectory Sparkline with Gradient Shaded Area (Thick 3px Vector)
    void DrawTrajectoryArea(int x1, int y1, int x2, int y2, bool isBullish, uint lineCol, uint fillCol)
    {
       int w = x2 - x1;
@@ -275,7 +302,7 @@ private:
 
       int points = 18;
       int prevX = x1;
-      int prevY = isBullish ? (y2 - 6) : (y1 + 6);
+      int prevY = isBullish ? (y2 - 8) : (y1 + 8);
 
       for(int p = 0; p < points; p++)
       {
@@ -285,16 +312,16 @@ private:
          int py;
          if(isBullish)
          {
-            double wave = MathSin(p * 1.1) * (h * 0.12) + MathCos(p * 0.6) * (h * 0.06);
-            py = (int)(y2 - 8 - (progress * (h - 18)) + wave);
+            double wave = MathSin(p * 1.1) * (h * 0.14) + MathCos(p * 0.6) * (h * 0.08);
+            py = (int)(y2 - 10 - (progress * (h - 22)) + wave);
          }
          else
          {
-            double wave = MathSin(p * 1.1) * (h * 0.12) + MathCos(p * 0.6) * (h * 0.06);
-            py = (int)(y1 + 6 + (progress * (h - 18)) + wave);
+            double wave = MathSin(p * 1.1) * (h * 0.14) + MathCos(p * 0.6) * (h * 0.08);
+            py = (int)(y1 + 8 + (progress * (h - 22)) + wave);
          }
-         if(py < y1 + 2) py = y1 + 2;
-         if(py > y2 - 3) py = y2 - 3;
+         if(py < y1 + 3) py = y1 + 3;
+         if(py > y2 - 4) py = y2 - 4;
 
          for(int fy = py; fy < y2 - 2; fy++)
          {
@@ -306,7 +333,9 @@ private:
 
          if(p > 0)
          {
+            // Thick 3px line
             m_canvas.Line(prevX, prevY, px, py, lineCol);
+            m_canvas.Line(prevX, prevY - 1, px, py - 1, lineCol);
             m_canvas.Line(prevX, prevY + 1, px, py + 1, lineCol);
          }
          prevX = px;
@@ -363,7 +392,7 @@ public:
       if(!Init()) return;
 
       // ====================================================================
-      // VERIFIED DIRECT ARGB TOKENS (Pure RGB, zero blue/red reversals)
+      // DIRECT ARGB TOKENS (Pure RGB, zero blue/red reversals)
       // ====================================================================
       uint colPageBg     = 0xFFEAEFF2; // #EAEFF2 Subtle Metallic Soft Gray
       uint colCardBg     = 0xFFFFFFFF; // #FFFFFF Pure White
@@ -392,106 +421,104 @@ public:
 
       m_canvas.Erase(colPageBg);
 
-      int sidePad = 10;
+      int sidePad = 12;
       int contentW = m_width - (2 * sidePad);
 
       // ====================================================================
-      // 1. AUTO-SCALED COMPONENT HEIGHTS (GUARANTEES 100% SINGLE-SCREEN FIT)
+      // 1. AUTO-SCALED COMPONENT HEIGHTS (V3 3-4x DIGITAL EXPANSION)
       // ====================================================================
-      int headY         = 6;
-      int headH         = 54; // Compact 2-row header
-      int macroY        = headY + headH + 4;
-      int macroH        = 32; // Compact macro ribbon
-      int bottomRibbonH = 56; // Compact 5-column watchlist ribbon
-      int gridY         = macroY + macroH + 4;
-      int gridGap       = 8;
+      int headY         = 8;
+      int headH         = 64; // Two-row high visibility header
+      int macroY        = headY + headH + 6;
+      int macroH        = 38; // Clean macro bar
+      int bottomRibbonH = 72; // High-visibility digital watchlist ribbon
+      int gridY         = macroY + macroH + 6;
+      int gridGap       = 10;
 
-      // Available height calculation
       int availH = m_height - gridY - bottomRibbonH - 12;
       int cardH  = (availH - gridGap) / 2;
-      if(cardH < 280) cardH = 280;
+      if(cardH < 350) cardH = 350;
 
       int cardW = (contentW - gridGap) / 2;
 
       // ====================================================================
-      // 2. TOP MASTER HEADER BAR (Compact 54px Height)
+      // 2. TOP MASTER HEADER BAR (64px Height, Tribal Bold & Large Metrics)
       // ====================================================================
       DrawModuleBox(sidePad, headY, sidePad + contentW, headY + headH, colCardBg, colBorder);
 
-      // Row 1: Title (18px Bold) + QUANT Badge (12px) + EA Running Platform (13px)
-      m_canvas.FontSet("Segoe UI", 18, FW_BOLD);
-      m_canvas.TextOut(sidePad + 14, headY + 6, "HR BLOOMBERG QUANT TERMINAL — HR UNIFIED MASTER OS", colTextBlack);
+      // Title: Tribal Bold "Segoe UI Black" (20px)
+      m_canvas.FontSet("Segoe UI Black", 20, FW_BLACK);
+      m_canvas.TextOut(sidePad + 16, headY + 8, "HR BLOOMBERG QUANT TERMINAL — HR UNIFIED MASTER OS", colTextBlack);
       
-      DrawPill(sidePad + 530, headY + 6, 62, 22, "QUANT", colAmberBg, colAmberTxt, 12, true);
+      DrawPill(sidePad + 660, headY + 8, 76, 24, "QUANT", colAmberBg, colAmberTxt, 14, true);
 
-      m_canvas.FontSet("Segoe UI", 13, FW_NORMAL);
-      m_canvas.TextOut(sidePad + contentW - 160, headY + 8, "EA Running Platform", colTextMuted);
+      m_canvas.FontSet("Segoe UI Bold", 15, FW_BOLD);
+      m_canvas.TextOut(sidePad + contentW - 190, headY + 10, "EA Running Platform", colTextMuted);
 
-      // Row 2: Sub-Metrics (13px Bold Typography)
-      int row2Y = headY + 30;
-      m_canvas.Line(sidePad + 14, row2Y - 3, sidePad + contentW - 14, row2Y - 3, colInnerBrd);
+      // Row 2: Sub-Metrics (15px-16px Bold)
+      int row2Y = headY + 36;
+      m_canvas.Line(sidePad + 16, row2Y - 4, sidePad + contentW - 16, row2Y - 4, colInnerBrd);
 
-      m_canvas.FontSet("Segoe UI", 13, FW_NORMAL);
-      m_canvas.TextOut(sidePad + 14, row2Y, "Active Session:", colTextMuted);
+      m_canvas.FontSet("Segoe UI Bold", 15, FW_BOLD);
+      m_canvas.TextOut(sidePad + 16, row2Y, "Active Session:", colTextMuted);
       string activeSess = (sessIntel.activeSessionName != "OFF-SESSION") ? sessIntel.activeSessionName : "OFF";
-      DrawPill(sidePad + 115, row2Y - 2, 42, 20, activeSess, colChipGray, colTextBlack, 11, true);
+      DrawPill(sidePad + 135, row2Y - 2, 48, 22, activeSess, colChipGray, colTextBlack, 13, true);
 
       string srvTimeStr = StringFormat("Server: %s | UK: %s", TimeToString(serverTime, TIME_MINUTES), TimeToString(ukTime, TIME_MINUTES));
-      m_canvas.TextOut(sidePad + 168, row2Y, srvTimeStr, colTextMuted);
+      m_canvas.TextOut(sidePad + 195, row2Y, srvTimeStr, colTextMuted);
 
-      // Right-aligned Risk metrics (13px Bold)
-      int rx = sidePad + contentW - 540;
+      // Right-aligned Risk items
+      int rx = sidePad + contentW - 620;
       m_canvas.TextOut(rx, row2Y, "Daily Drawdown:", colTextMuted);
-      m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
-      m_canvas.TextOut(rx + 105, row2Y, StringFormat("%.2f%%", dailyDD), (dailyDD >= maxDailyDD ? colBearRed : colBearDark));
+      m_canvas.FontSet("Consolas", 16, FW_BOLD);
+      m_canvas.TextOut(rx + 125, row2Y, StringFormat("%.2f%%", dailyDD), (dailyDD >= maxDailyDD ? colBearRed : colBearDark));
 
-      m_canvas.FontSet("Segoe UI", 13, FW_NORMAL);
-      m_canvas.TextOut(rx + 170, row2Y, "Open Risk:", colTextMuted);
-      m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
-      m_canvas.TextOut(rx + 240, row2Y, StringFormat("%.2f%%", openRisk), colTextBlack);
+      m_canvas.FontSet("Segoe UI Bold", 15, FW_BOLD);
+      m_canvas.TextOut(rx + 205, row2Y, "Open Risk:", colTextMuted);
+      m_canvas.FontSet("Consolas", 16, FW_BOLD);
+      m_canvas.TextOut(rx + 285, row2Y, StringFormat("%.2f%%", openRisk), colTextBlack);
 
-      m_canvas.FontSet("Segoe UI", 13, FW_NORMAL);
-      m_canvas.TextOut(rx + 310, row2Y, "Positions:", colTextMuted);
-      m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
-      m_canvas.TextOut(rx + 380, row2Y, StringFormat("%d/%d", openPos, maxPos), colTextBlack);
+      m_canvas.FontSet("Segoe UI Bold", 15, FW_BOLD);
+      m_canvas.TextOut(rx + 365, row2Y, "Positions:", colTextMuted);
+      m_canvas.FontSet("Consolas", 16, FW_BOLD);
+      m_canvas.TextOut(rx + 445, row2Y, StringFormat("%d/%d", openPos, maxPos), colTextBlack);
 
       // ====================================================================
-      // 3. MACRO REGIME BAR (Compact 32px Height)
+      // 3. MACRO REGIME BAR (38px Height, 15px-16px Digital Watch Style)
       // ====================================================================
       DrawModuleBox(sidePad, macroY, sidePad + contentW, macroY + macroH, colCardBg, colBorder);
 
-      m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
-      m_canvas.TextOut(sidePad + 14, macroY + 7, "DXY (US Dollar Index)", colTextBlack);
+      m_canvas.FontSet("Segoe UI Black", 16, FW_BLACK);
+      m_canvas.TextOut(sidePad + 16, macroY + 9, "DXY (US Dollar Index)", colTextBlack);
 
-      m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
-      m_canvas.TextOut(sidePad + 165, macroY + 7, "Live price", colTextMuted);
+      m_canvas.FontSet("Segoe UI Bold", 14, FW_BOLD);
+      m_canvas.TextOut(sidePad + 205, macroY + 10, "Live price", colTextMuted);
 
-      m_canvas.FontSet("Segoe UI", 13, FW_BOLD);
+      m_canvas.FontSet("Consolas", 18, FW_BOLD);
       string dxyPriceStr = StringFormat("%.3f (%+.2f%%)", dxyPrice, dxyChange);
-      m_canvas.TextOut(sidePad + 230, macroY + 7, dxyPriceStr, (dxyChange >= 0.0 ? colBullDark : colBearDark));
+      m_canvas.TextOut(sidePad + 285, macroY + 9, dxyPriceStr, (dxyChange >= 0.0 ? colBullDark : colBearDark));
 
-      m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
-      m_canvas.TextOut(sidePad + 345, macroY + 7, "Inline correlation: Gold", colTextMuted);
-      m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-      m_canvas.TextOut(sidePad + 475, macroY + 7, "0.99% ,", colBullDark);
+      m_canvas.FontSet("Segoe UI Bold", 14, FW_BOLD);
+      m_canvas.TextOut(sidePad + 450, macroY + 10, "Inline correlation: Gold", colTextMuted);
+      m_canvas.FontSet("Consolas", 15, FW_BOLD);
+      m_canvas.TextOut(sidePad + 610, macroY + 10, "0.99% ,", colBullDark);
 
-      m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
-      m_canvas.TextOut(sidePad + 525, macroY + 7, "Silver", colTextMuted);
-      m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-      m_canvas.TextOut(sidePad + 560, macroY + 7, "0.37% ,", colBullDark);
+      m_canvas.FontSet("Segoe UI Bold", 14, FW_BOLD);
+      m_canvas.TextOut(sidePad + 675, macroY + 10, "Silver", colTextMuted);
+      m_canvas.FontSet("Consolas", 15, FW_BOLD);
+      m_canvas.TextOut(sidePad + 725, macroY + 10, "0.37% ,", colBullDark);
 
-      m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
-      m_canvas.TextOut(sidePad + 610, macroY + 7, "S&P 500", colTextMuted);
-      m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-      m_canvas.TextOut(sidePad + 660, macroY + 7, "0.16% ,", colBullDark);
+      m_canvas.FontSet("Segoe UI Bold", 14, FW_BOLD);
+      m_canvas.TextOut(sidePad + 790, macroY + 10, "S&P 500", colTextMuted);
+      m_canvas.FontSet("Consolas", 15, FW_BOLD);
+      m_canvas.TextOut(sidePad + 850, macroY + 10, "0.16% ,", colBullDark);
 
-      m_canvas.FontSet("Segoe UI", 12, FW_NORMAL);
-      m_canvas.TextOut(sidePad + 710, macroY + 7, "Nasdaq", colTextMuted);
-      m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-      m_canvas.TextOut(sidePad + 755, macroY + 7, "0.65%", colBullDark);
+      m_canvas.FontSet("Segoe UI Bold", 14, FW_BOLD);
+      m_canvas.TextOut(sidePad + 915, macroY + 10, "Nasdaq", colTextMuted);
+      m_canvas.FontSet("Consolas", 15, FW_BOLD);
+      m_canvas.TextOut(sidePad + 975, macroY + 10, "0.65%", colBullDark);
 
-      // Right Pill: Active Trading Killzones
-      DrawPill(sidePad + contentW - 175, macroY + 4, 165, 24, "Active Trading Killzones", colChipGray, colTextMuted, 11, true);
+      DrawPill(sidePad + contentW - 200, macroY + 5, 185, 28, "Active Trading Killzones", colChipGray, colTextMuted, 13, true);
 
       // ====================================================================
       // 4. FOUR MASTER INSTRUMENT CARDS (2 Columns x 2 Rows)
@@ -509,187 +536,198 @@ public:
 
          DrawModuleBox(cx1, cy1, cx2, cy2, colCardBg, colBorder);
 
-         // --- Card Top Header: Pair Name (18px Bold) + Price (22px Bold) ---
-         m_canvas.FontSet("Segoe UI", 18, FW_BOLD);
-         m_canvas.TextOut(cx1 + 14, cy1 + 8, data[i].baseName, colTextBlack);
-         int baseLen = (int)StringLen(data[i].baseName) * 11;
-         m_canvas.FontSet("Segoe UI", 14, FW_NORMAL);
-         m_canvas.TextOut(cx1 + 18 + baseLen, cy1 + 11, subNames[i], colTextMuted);
+         // --- Card Top Header: Tribal Bold Name (30px) + Digital Watch Price (46px) ---
+         m_canvas.FontSet("Segoe UI Black", 30, FW_BLACK);
+         m_canvas.TextOut(cx1 + 16, cy1 + 8, data[i].baseName, colTextBlack);
+         int baseLen = (int)StringLen(data[i].baseName) * 18;
+         m_canvas.FontSet("Segoe UI Bold", 18, FW_BOLD);
+         m_canvas.TextOut(cx1 + 20 + baseLen, cy1 + 18, subNames[i], colTextMuted);
 
-         // Live Price (22px Bold)
-         m_canvas.FontSet("Segoe UI", 22, FW_BOLD);
-         string prcStr;
+         // 46px DIGITAL WATCH PRICE WITH GLOW EFFECT
+         m_canvas.FontSet("Consolas", 44, FW_BOLD);
+         string rawPrcStr;
          uint prcColor = (data[i].priceChangePct >= 0.0) ? colBullDark : colBearDark;
          if(data[i].currentPrice > 0.0)
          {
             if(i == 1)
-               prcStr = StringFormat("%.3f (%+.2f%%)", data[i].currentPrice, data[i].priceChangePct);
+               rawPrcStr = StringFormat("%.3f (%+.2f%%)", data[i].currentPrice, data[i].priceChangePct);
             else
-               prcStr = StringFormat("%.2f (%+.2f%%)", data[i].currentPrice, data[i].priceChangePct);
+               rawPrcStr = StringFormat("%.2f (%+.2f%%)", data[i].currentPrice, data[i].priceChangePct);
          }
-         else prcStr = "-- (OFFLINE)";
+         else rawPrcStr = "-- (OFFLINE)";
 
-         int prcW = (int)StringLen(prcStr) * 13;
-         m_canvas.TextOut(cx2 - 14 - prcW, cy1 + 7, prcStr, prcColor);
+         int prcW = (int)StringLen(rawPrcStr) * 24;
+         int prcX = cx2 - 16 - prcW;
+         int prcY = cy1 + 6;
 
-         int padInside = 12;
+         // Dual-layer Digital Shadow Glow
+         m_canvas.TextOut(prcX + 1, prcY + 1, rawPrcStr, 0x30000000);
+         m_canvas.TextOut(prcX, prcY, rawPrcStr, prcColor);
+
+         int padInside = 14;
          int innerW = cardW - (2 * padInside);
-         int curY = cy1 + 36;
+         int curY = cy1 + 56;
 
          // --- SECTION A: EMA REGIME (9/21/200) ---
-         m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
+         m_canvas.FontSet("Segoe UI Bold", 14, FW_BOLD);
          m_canvas.TextOut(cx1 + padInside, curY, "A - EMA REGIME (9/21/200)", colTextSubtle);
-         curY += 15;
+         curY += 20;
 
          bool isBullM5  = (data[i].m5EmaState == "BULLISH");
          bool isBullH1  = (data[i].h1EmaState == "BULLISH");
          bool isBullAll = (isBullM5 && isBullH1);
 
-         // Dynamic tight Pills (24px Height, 11px Bold Typography)
-         DrawPill(cx1 + padInside, curY, 92, 24, (isBullM5 ? "M5: BULLISH" : "M5: BEARISH"), (isBullM5 ? colBullGreen : colBearRed), colPillText, 11, true);
-         DrawPill(cx1 + padInside + 98, curY, 92, 24, (isBullH1 ? "H1: BULLISH" : "H1: BEARISH"), (isBullH1 ? colBullGreen : colBearRed), colPillText, 11, true);
-         DrawPill(cx1 + padInside + 196, curY, 78, 24, (isBullAll ? "BULLISH" : "BEARISH"), (isBullAll ? colBullGreen : colBearRed), colPillText, 11, true);
+         // Large 30px Pills with 16px Bold text
+         DrawPill(cx1 + padInside, curY, 126, 30, (isBullM5 ? "M5: BULLISH" : "M5: BEARISH"), (isBullM5 ? colBullGreen : colBearRed), colPillText, 15, true);
+         DrawPill(cx1 + padInside + 134, curY, 126, 30, (isBullH1 ? "H1: BULLISH" : "H1: BEARISH"), (isBullH1 ? colBullGreen : colBearRed), colPillText, 15, true);
+         DrawPill(cx1 + padInside + 268, curY, 102, 30, (isBullAll ? "BULLISH" : "BEARISH"), (isBullAll ? colBullGreen : colBearRed), colPillText, 15, true);
 
          // Separation & EMA Health
          string sepStr = StringFormat("Sep: %.2f%% | Health: %.0f%%", data[i].emaSeparationPct, data[i].emaHealthScore);
-         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-         int sepW = (int)StringLen(sepStr) * 7;
-         m_canvas.TextOut(cx2 - padInside - sepW, curY + 4, sepStr, colTextMuted);
+         m_canvas.FontSet("Segoe UI Bold", 15, FW_BOLD);
+         int sepW = (int)StringLen(sepStr) * 9;
+         m_canvas.TextOut(cx2 - padInside - sepW, curY + 6, sepStr, colTextMuted);
 
-         curY += 28;
+         curY += 38;
 
-         // --- SECTION B: ICT / SMC MATRIX (40px Boxes) ---
-         m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
+         // --- SECTION B: ICT / SMC MATRIX (44px Boxes with 22px Digital Numbers) ---
+         m_canvas.FontSet("Segoe UI Bold", 14, FW_BOLD);
          m_canvas.TextOut(cx1 + padInside, curY, "B - ICT / SMC MATRIX", colTextSubtle);
-         curY += 15;
+         curY += 20;
 
-         int smcBoxGap = 6;
+         int smcBoxGap = 8;
          int smcBoxW = (innerW - (3 * smcBoxGap)) / 4;
-         int smcBoxH = 38;
+         int smcBoxH = 46;
 
          // Box 1: Structure (BOS / CHOCH)
          int b1_x = cx1 + padInside;
          DrawModuleBox(b1_x, curY, b1_x + smcBoxW, curY + smcBoxH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 10, FW_NORMAL);
-         m_canvas.TextOut(b1_x + 6, curY + 3, "Structure:", colTextSubtle);
-         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
+         m_canvas.FontSet("Segoe UI Bold", 12, FW_BOLD);
+         m_canvas.TextOut(b1_x + 8, curY + 4, "Structure:", colTextSubtle);
+         m_canvas.FontSet("Segoe UI Black", 15, FW_BLACK);
          string b1_val = (StringFind(data[i].bosStatus, "BOS") >= 0 ? "BOS (" + data[i].structureClass + ")" : "CHOCH (" + data[i].structureClass + ")");
-         m_canvas.TextOut(b1_x + 6, curY + 18, b1_val, colTextBlack);
+         m_canvas.TextOut(b1_x + 8, curY + 22, b1_val, colTextBlack);
 
-         // Box 2: Nearest BSL
+         // Box 2: Nearest BSL (22px Digital Number)
          int b2_x = b1_x + smcBoxW + smcBoxGap;
          DrawModuleBox(b2_x, curY, b2_x + smcBoxW, curY + smcBoxH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 10, FW_NORMAL);
-         m_canvas.TextOut(b2_x + 6, curY + 3, "Nearest BSL", colTextSubtle);
-         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
+         m_canvas.FontSet("Segoe UI Bold", 12, FW_BOLD);
+         m_canvas.TextOut(b2_x + 8, curY + 4, "Nearest BSL", colTextSubtle);
+         m_canvas.FontSet("Consolas", 22, FW_BOLD);
          string bslStr = (data[i].nearestBSL > 0) ? StringFormat("%.1f", data[i].nearestBSL) : "CHOCH";
-         m_canvas.TextOut(b2_x + 6, curY + 18, bslStr, colTextBlack);
+         m_canvas.TextOut(b2_x + 8, curY + 20, bslStr, colTextBlack);
 
-         // Box 3: Nearest SSL
+         // Box 3: Nearest SSL (22px Digital Number)
          int b3_x = b2_x + smcBoxW + smcBoxGap;
          DrawModuleBox(b3_x, curY, b3_x + smcBoxW, curY + smcBoxH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 10, FW_NORMAL);
-         m_canvas.TextOut(b3_x + 6, curY + 3, "Nearest SSL", colTextSubtle);
-         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
+         m_canvas.FontSet("Segoe UI Bold", 12, FW_BOLD);
+         m_canvas.TextOut(b3_x + 8, curY + 4, "Nearest SSL", colTextSubtle);
+         m_canvas.FontSet("Consolas", 22, FW_BOLD);
          string sslStr = (data[i].nearestSSL > 0) ? StringFormat("%.1f", data[i].nearestSSL) : "CHOCH";
-         m_canvas.TextOut(b3_x + 6, curY + 18, sslStr, colTextBlack);
+         m_canvas.TextOut(b3_x + 8, curY + 20, sslStr, colTextBlack);
 
          // Box 4: Last SWEEP / Zone
          int b4_x = b3_x + smcBoxW + smcBoxGap;
          DrawModuleBox(b4_x, curY, b4_x + smcBoxW, curY + smcBoxH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 10, FW_NORMAL);
-         m_canvas.TextOut(b4_x + 6, curY + 3, "Last SWEEP", colTextSubtle);
-         m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
+         m_canvas.FontSet("Segoe UI Bold", 12, FW_BOLD);
+         m_canvas.TextOut(b4_x + 8, curY + 4, "Last SWEEP", colTextSubtle);
+         m_canvas.FontSet("Segoe UI Bold", 14, FW_BOLD);
          string sweepVal = (data[i].lastSweepDirection != "NONE" && data[i].lastSweepDirection != "") ? "SWEEP CONF" : "DISCOUNT (Buy)";
-         m_canvas.TextOut(b4_x + 6, curY + 18, sweepVal, colTextBlack);
+         m_canvas.TextOut(b4_x + 8, curY + 22, sweepVal, colTextBlack);
 
-         curY += smcBoxH + 8;
+         curY += smcBoxH + 10;
 
-         // --- SECTION C: INDICATORS (28px Boxes) ---
-         m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
+         // --- SECTION C: INDICATORS (34px Boxes with 20px Digital Numbers) ---
+         m_canvas.FontSet("Segoe UI Bold", 14, FW_BOLD);
          m_canvas.TextOut(cx1 + padInside, curY, "C - INDICATORS", colTextSubtle);
-         curY += 15;
+         curY += 20;
 
-         int indBoxGap = 6;
+         int indBoxGap = 8;
          int indBoxW = (innerW - (2 * indBoxGap)) / 3;
-         int indBoxH = 28;
+         int indBoxH = 34;
 
          // Ind 1: RSI(14)
          int ind1_x = cx1 + padInside;
          DrawModuleBox(ind1_x, curY, ind1_x + indBoxW, curY + indBoxH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-         m_canvas.TextOut(ind1_x + 8, curY + 6, StringFormat("RSI(14): %.1f", data[i].rsi14), colTextBlack);
+         m_canvas.FontSet("Segoe UI Bold", 13, FW_BOLD);
+         m_canvas.TextOut(ind1_x + 8, curY + 8, "RSI(14):", colTextSubtle);
+         m_canvas.FontSet("Consolas", 20, FW_BOLD);
+         m_canvas.TextOut(ind1_x + 75, curY + 6, StringFormat("%.1f", data[i].rsi14), colTextBlack);
 
          // Ind 2: MACD
          int ind2_x = ind1_x + indBoxW + indBoxGap;
          DrawModuleBox(ind2_x, curY, ind2_x + indBoxW, curY + indBoxH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-         m_canvas.TextOut(ind2_x + 8, curY + 6, StringFormat("MACD: %+.2f (Cross)", data[i].macdHist), colTextBlack);
+         m_canvas.FontSet("Segoe UI Bold", 13, FW_BOLD);
+         m_canvas.TextOut(ind2_x + 8, curY + 8, "MACD:", colTextSubtle);
+         m_canvas.FontSet("Consolas", 20, FW_BOLD);
+         m_canvas.TextOut(ind2_x + 55, curY + 6, StringFormat("%+.2f", data[i].macdHist), colTextBlack);
 
          // Ind 3: ATR(14)
          int ind3_x = ind2_x + indBoxW + indBoxGap;
          DrawModuleBox(ind3_x, curY, ind3_x + indBoxW, curY + indBoxH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 12, FW_BOLD);
-         m_canvas.TextOut(ind3_x + 8, curY + 6, StringFormat("ATR(14): %.1f pts", data[i].atrPoints), colTextBlack);
+         m_canvas.FontSet("Segoe UI Bold", 13, FW_BOLD);
+         m_canvas.TextOut(ind3_x + 8, curY + 8, "ATR(14):", colTextSubtle);
+         m_canvas.FontSet("Consolas", 20, FW_BOLD);
+         m_canvas.TextOut(ind3_x + 72, curY + 6, StringFormat("%.1f pts", data[i].atrPoints), colTextBlack);
 
-         curY += indBoxH + 8;
+         curY += indBoxH + 10;
 
          // --- BOTTOM VISUAL ROW: VOL & FLOW | RSI SPEEDOMETER GAUGE | TRAJECTORY ---
-         int visH = cy2 - curY - 6;
-         if(visH < 62) visH = 62;
+         int visH = cy2 - curY - 8;
+         if(visH < 74) visH = 74;
 
          int vGap = 8;
          int v1_w = (int)(innerW * 0.32);
          int v2_w = (int)(innerW * 0.28);
          int v3_w = innerW - v1_w - v2_w - (2 * vGap);
 
-         // Module 1: VOL & ORDER FLOW
+         // Module 1: VOL & ORDER FLOW (16px Progress Bar)
          int v1_x = cx1 + padInside;
          DrawModuleBox(v1_x, curY, v1_x + v1_w, curY + visH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 10, FW_BOLD);
-         m_canvas.TextOut(v1_x + 8, curY + 4, "VOL & ORDER FLOW", colTextSubtle);
+         m_canvas.FontSet("Segoe UI Bold", 13, FW_BOLD);
+         m_canvas.TextOut(v1_x + 10, curY + 6, "VOL & ORDER FLOW", colTextSubtle);
          
-         // Progress Bar
-         int barTrackY = curY + 22;
-         int barTrackW = v1_w - 16;
-         m_canvas.FillRectangle(v1_x + 8, barTrackY, v1_x + 8 + barTrackW, barTrackY + 8, colTrackBg);
+         // 16px Thick Progress Bar
+         int barTrackY = curY + 26;
+         int barTrackW = v1_w - 20;
+         int barTrackH = 14;
+         m_canvas.FillRectangle(v1_x + 10, barTrackY, v1_x + 10 + barTrackW, barTrackY + barTrackH, colTrackBg);
          double buyPct = (data[i].buyingPressurePct > 0.0 ? data[i].buyingPressurePct : 65.0);
          int barFillW = (int)(barTrackW * (buyPct / 100.0));
-         m_canvas.FillRectangle(v1_x + 8, barTrackY, v1_x + 8 + barFillW, barTrackY + 8, colBullDark);
+         m_canvas.FillRectangle(v1_x + 10, barTrackY, v1_x + 10 + barFillW, barTrackY + barTrackH, colBullDark);
 
-         m_canvas.FontSet("Segoe UI", 11, FW_BOLD);
-         m_canvas.TextOut(v1_x + 8, curY + 38, StringFormat("BUY PRESSURE: %.0f%%", buyPct), colTextBlack);
+         m_canvas.FontSet("Consolas", 18, FW_BOLD);
+         m_canvas.TextOut(v1_x + 10, curY + 46, StringFormat("BUY PRESS: %.0f%%", buyPct), colTextBlack);
 
-         // Module 2: RSI SPEEDOMETER GAUGE
+         // Module 2: RSI SPEEDOMETER GAUGE (10px Arc + 24px Digital readout inside)
          int v2_x = v1_x + v1_w + vGap;
          DrawModuleBox(v2_x, curY, v2_x + v2_w, curY + visH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 10, FW_BOLD);
-         m_canvas.TextOut(v2_x + 8, curY + 4, "RSI", colTextSubtle);
+         m_canvas.FontSet("Segoe UI Bold", 13, FW_BOLD);
+         m_canvas.TextOut(v2_x + 10, curY + 6, "RSI GAUGE", colTextSubtle);
 
          int gaugeCx = v2_x + (v2_w / 2);
-         int gaugeCy = curY + visH - 10;
-         int gaugeRad = (visH / 2) - 4;
+         int gaugeCy = curY + visH - 8;
+         int gaugeRad = (visH / 2) - 2;
          DrawSpeedometerGauge(gaugeCx, gaugeCy, gaugeRad, data[i].rsi14, 0.0, 100.0, colTrackBg, colBullDark, colBearDark, colTextBlack);
 
          // Module 3: TRAJECTORY SHADED SPARKLINE & INTRADAY VECTOR
          int v3_x = v2_x + v2_w + vGap;
          DrawModuleBox(v3_x, curY, v3_x + v3_w, curY + visH, colInnerBg, colInnerBrd);
-         m_canvas.FontSet("Segoe UI", 10, FW_BOLD);
-         m_canvas.TextOut(v3_x + 8, curY + 4, "TRAJECTORY", colTextSubtle);
+         m_canvas.FontSet("Segoe UI Bold", 13, FW_BOLD);
+         m_canvas.TextOut(v3_x + 10, curY + 6, "TRAJECTORY", colTextSubtle);
 
-         // Detailed Trajectory Subtitle (M5 trend + H1 trend)
-         m_canvas.FontSet("Segoe UI", 10, FW_BOLD);
-         string trajDiag = StringFormat("M5:%s|H1:%s", (data[i].m5EmaState == "BULLISH" ? "BULL" : "BEAR"), (data[i].h1EmaState == "BULLISH" ? "BULL" : "BEAR"));
-         m_canvas.TextOut(v3_x + 85, curY + 4, trajDiag, (data[i].priceChangePct >= 0.0 ? colBullDark : colBearDark));
+         m_canvas.FontSet("Consolas", 13, FW_BOLD);
+         string trajDiag = StringFormat("M5:%s | H1:%s", (data[i].m5EmaState == "BULLISH" ? "BULL" : "BEAR"), (data[i].h1EmaState == "BULLISH" ? "BULL" : "BEAR"));
+         m_canvas.TextOut(v3_x + 105, curY + 6, trajDiag, (data[i].priceChangePct >= 0.0 ? colBullDark : colBearDark));
 
          bool isTrendBull = (data[i].priceChangePct >= 0.0);
          uint sparkLine = (isTrendBull ? colBullDark : colBearDark);
          uint sparkFill = (isTrendBull ? colBullLight : colBearLight);
-         DrawTrajectoryArea(v3_x + 8, curY + 18, v3_x + v3_w - 8, curY + visH - 6, isTrendBull, sparkLine, sparkFill);
+         DrawTrajectoryArea(v3_x + 10, curY + 22, v3_x + v3_w - 10, curY + visH - 6, isTrendBull, sparkLine, sparkFill);
       }
 
       // ====================================================================
-      // 5. BOTTOM 5-SYMBOL WATCHLIST RIBBON (Auto-fitting 56px Height)
+      // 5. BOTTOM 5-SYMBOL WATCHLIST RIBBON (72px Height, 24px Digital Numbers)
       // ====================================================================
       int barY = m_height - bottomRibbonH - 4;
       DrawModuleBox(sidePad, barY, sidePad + contentW, barY + bottomRibbonH, colCardBg, colBorder);
@@ -701,55 +739,60 @@ public:
       {
          int bx1 = sidePad + (s * itemW);
          int bx2 = bx1 + itemW;
-         if(s > 0) m_canvas.Line(bx1, barY + 6, bx1, barY + bottomRibbonH - 6, colInnerBrd);
+         if(s > 0) m_canvas.Line(bx1, barY + 8, bx1, barY + bottomRibbonH - 8, colInnerBrd);
 
-         // Row 1: Symbol Name (14px Bold) + % TREND (11px)
-         m_canvas.FontSet("Segoe UI", 14, FW_BOLD);
-         m_canvas.TextOut(bx1 + 12, barY + 6, botTitles[s], colTextBlack);
-         m_canvas.FontSet("Segoe UI", 11, FW_NORMAL);
-         m_canvas.TextOut(bx2 - 65, barY + 8, "% TREND", colTextSubtle);
+         // Row 1: Symbol Name (Tribal Bold 18px) + % TREND (12px)
+         m_canvas.FontSet("Segoe UI Black", 18, FW_BLACK);
+         m_canvas.TextOut(bx1 + 14, barY + 8, botTitles[s], colTextBlack);
+         m_canvas.FontSet("Segoe UI Bold", 12, FW_BOLD);
+         m_canvas.TextOut(bx2 - 75, barY + 10, "% TREND", colTextSubtle);
 
-         // Row 2: Live Price (16px Bold) & Percentage & Status Dots
-         m_canvas.FontSet("Segoe UI", 16, FW_BOLD);
+         // Row 2: Live Digital Price (24px Consolas Bold) & Percentage & Status Dots
+         m_canvas.FontSet("Consolas", 24, FW_BOLD);
          if(s < 4)
          {
             if(data[s].currentPrice > 0.0)
             {
                string pStr = (s == 1) ? StringFormat("%.3f", data[s].currentPrice) : StringFormat("%.2f", data[s].currentPrice);
                uint prcCol = (data[s].priceChangePct >= 0.0 ? colBullDark : colBearDark);
-               m_canvas.TextOut(bx1 + 12, barY + 28, pStr, prcCol);
+               
+               // Digital Glow
+               m_canvas.TextOut(bx1 + 15, barY + 36, pStr, 0x30000000);
+               m_canvas.TextOut(bx1 + 14, barY + 35, pStr, prcCol);
 
-               m_canvas.FontSet("Segoe UI", 14, FW_BOLD);
+               m_canvas.FontSet("Consolas", 18, FW_BOLD);
                string pctStr = StringFormat("%+.2f%%", data[s].priceChangePct);
-               m_canvas.TextOut(bx1 + 95, barY + 30, pctStr, prcCol);
+               m_canvas.TextOut(bx1 + 130, barY + 38, pctStr, prcCol);
 
                // 3 Status Dots
-               int dotX = bx1 + 165;
-               int dotY = barY + 37;
-               m_canvas.FillCircle(dotX, dotY, 4, (data[s].priceChangePct >= 0.0 ? colBullGreen : colBearRed));
-               m_canvas.FillCircle(dotX + 11, dotY, 4, colTrackBg);
-               m_canvas.FillCircle(dotX + 22, dotY, 4, colTrackBg);
+               int dotX = bx1 + 225;
+               int dotY = barY + 48;
+               m_canvas.FillCircle(dotX, dotY, 5, (data[s].priceChangePct >= 0.0 ? colBullGreen : colBearRed));
+               m_canvas.FillCircle(dotX + 14, dotY, 5, colTrackBg);
+               m_canvas.FillCircle(dotX + 28, dotY, 5, colTrackBg);
             }
             else
             {
-               m_canvas.TextOut(bx1 + 12, barY + 28, "-- (OFFLINE)", colTextSubtle);
+               m_canvas.TextOut(bx1 + 14, barY + 35, "-- (OFFLINE)", colTextSubtle);
             }
          }
          else // DXY
          {
             string dxyStr = StringFormat("%.3f", dxyPrice);
             uint dxyCol = (dxyChange >= 0.0 ? colBullDark : colBearDark);
-            m_canvas.TextOut(bx1 + 12, barY + 28, dxyStr, dxyCol);
+            
+            m_canvas.TextOut(bx1 + 15, barY + 36, dxyStr, 0x30000000);
+            m_canvas.TextOut(bx1 + 14, barY + 35, dxyStr, dxyCol);
 
-            m_canvas.FontSet("Segoe UI", 14, FW_BOLD);
+            m_canvas.FontSet("Consolas", 18, FW_BOLD);
             string dxyPctStr = StringFormat("%+.2f%%", dxyChange);
-            m_canvas.TextOut(bx1 + 95, barY + 30, dxyPctStr, dxyCol);
+            m_canvas.TextOut(bx1 + 130, barY + 38, dxyPctStr, dxyCol);
 
-            int dotX = bx1 + 165;
-            int dotY = barY + 37;
-            m_canvas.FillCircle(dotX, dotY, 4, (dxyChange >= 0.0 ? colBullGreen : colBearRed));
-            m_canvas.FillCircle(dotX + 11, dotY, 4, colTrackBg);
-            m_canvas.FillCircle(dotX + 22, dotY, 4, colTrackBg);
+            int dotX = bx1 + 225;
+            int dotY = barY + 48;
+            m_canvas.FillCircle(dotX, dotY, 5, (dxyChange >= 0.0 ? colBullGreen : colBearRed));
+            m_canvas.FillCircle(dotX + 14, dotY, 5, colTrackBg);
+            m_canvas.FillCircle(dotX + 28, dotY, 5, colTrackBg);
          }
       }
 
